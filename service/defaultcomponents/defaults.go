@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/prometheusexporter"
 	"go.opentelemetry.io/collector/exporter/prometheusremotewriteexporter"
 	"go.opentelemetry.io/collector/exporter/zipkinexporter"
+	"go.opentelemetry.io/collector/exporter/scalyrexporter"
 	"go.opentelemetry.io/collector/extension/fluentbitextension"
 	"go.opentelemetry.io/collector/extension/healthcheckextension"
 	"go.opentelemetry.io/collector/extension/pprofextension"
@@ -89,6 +90,7 @@ func Components() (
 		prometheusremotewriteexporter.NewFactory(),
 		loggingexporter.NewFactory(),
 		zipkinexporter.NewFactory(),
+		scalyrexporter.NewFactory(),
 		jaegerexporter.NewFactory(),
 		fileexporter.NewFactory(),
 		otlpexporter.NewFactory(),
