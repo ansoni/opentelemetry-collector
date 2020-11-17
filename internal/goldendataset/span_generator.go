@@ -25,55 +25,27 @@ import (
 )
 
 var statusCodeMap = map[PICTInputStatus]otlptrace.Status_StatusCode{
-	SpanStatusOk:                 otlptrace.Status_STATUS_CODE_OK,
-	SpanStatusCancelled:          otlptrace.Status_STATUS_CODE_CANCELLED,
-	SpanStatusUnknownError:       otlptrace.Status_STATUS_CODE_UNKNOWN_ERROR,
-	SpanStatusInvalidArgument:    otlptrace.Status_STATUS_CODE_INVALID_ARGUMENT,
-	SpanStatusDeadlineExceeded:   otlptrace.Status_STATUS_CODE_DEADLINE_EXCEEDED,
-	SpanStatusNotFound:           otlptrace.Status_STATUS_CODE_NOT_FOUND,
-	SpanStatusAlreadyExists:      otlptrace.Status_STATUS_CODE_ALREADY_EXISTS,
-	SpanStatusPermissionDenied:   otlptrace.Status_STATUS_CODE_PERMISSION_DENIED,
-	SpanStatusResourceExhausted:  otlptrace.Status_STATUS_CODE_RESOURCE_EXHAUSTED,
-	SpanStatusFailedPrecondition: otlptrace.Status_STATUS_CODE_FAILED_PRECONDITION,
-	SpanStatusAborted:            otlptrace.Status_STATUS_CODE_ABORTED,
-	SpanStatusOutOfRange:         otlptrace.Status_STATUS_CODE_OUT_OF_RANGE,
-	SpanStatusUnimplemented:      otlptrace.Status_STATUS_CODE_UNIMPLEMENTED,
-	SpanStatusInternalError:      otlptrace.Status_STATUS_CODE_INTERNAL_ERROR,
-	SpanStatusUnavailable:        otlptrace.Status_STATUS_CODE_UNAVAILABLE,
-	SpanStatusDataLoss:           otlptrace.Status_STATUS_CODE_DATA_LOSS,
-	SpanStatusUnauthenticated:    otlptrace.Status_STATUS_CODE_UNAUTHENTICATED,
+	SpanStatusUnset: otlptrace.Status_STATUS_CODE_UNSET,
+	SpanStatusOk:    otlptrace.Status_STATUS_CODE_OK,
+	SpanStatusError: otlptrace.Status_STATUS_CODE_ERROR,
 }
 
 var statusMsgMap = map[PICTInputStatus]string{
-	SpanStatusOk:                 "",
-	SpanStatusCancelled:          "Cancellation received",
-	SpanStatusUnknownError:       "",
-	SpanStatusInvalidArgument:    "parameter is required",
-	SpanStatusDeadlineExceeded:   "timed out after 30002 ms",
-	SpanStatusNotFound:           "/dragons/RomanianLonghorn not found",
-	SpanStatusAlreadyExists:      "/dragons/Drogon already exists",
-	SpanStatusPermissionDenied:   "tlannister does not have write permission",
-	SpanStatusResourceExhausted:  "ResourceExhausted",
-	SpanStatusFailedPrecondition: "33a64df551425fcc55e4d42a148795d9f25f89d4 has been edited",
-	SpanStatusAborted:            "",
-	SpanStatusOutOfRange:         "Range Not Satisfiable",
-	SpanStatusUnimplemented:      "Unimplemented",
-	SpanStatusInternalError:      "java.lang.NullPointerException",
-	SpanStatusUnavailable:        "RecommendationService is currently unavailable",
-	SpanStatusDataLoss:           "",
-	SpanStatusUnauthenticated:    "nstark is unknown user",
+	SpanStatusUnset: "Unset",
+	SpanStatusOk:    "Ok",
+	SpanStatusError: "Error",
 }
 
-//GenerateSpans generates a slice of OTLP Span objects with the number of spans specified by the count input
-//parameter. The startPos parameter specifies the line in the PICT tool-generated, test parameter
-//combination records file specified by the pictFile parameter to start reading from. When the end record
-//is reached it loops back to the first record. The random parameter injects the random number generator
-//to use in generating IDs and other random values. Using a random number generator with the same seed value
-//enables reproducible tests.
+// GenerateSpans generates a slice of OTLP Span objects with the number of spans specified by the count input
+// parameter. The startPos parameter specifies the line in the PICT tool-generated, test parameter
+// combination records file specified by the pictFile parameter to start reading from. When the end record
+// is reached it loops back to the first record. The random parameter injects the random number generator
+// to use in generating IDs and other random values. Using a random number generator with the same seed value
+// enables reproducible tests.
 //
-//The return values are the slice with the generated spans, the starting position for the next generation
-//run and the error which caused the spans generation to fail. If err is not nil, the spans slice will
-//have nil values.
+// The return values are the slice with the generated spans, the starting position for the next generation
+// run and the error which caused the spans generation to fail. If err is not nil, the spans slice will
+// have nil values.
 func GenerateSpans(count int, startPos int, pictFile string, random io.Reader) ([]*otlptrace.Span, int, error) {
 	pairsData, err := loadPictOutputFile(pictFile)
 	if err != nil {
@@ -84,8 +56,8 @@ func GenerateSpans(count int, startPos int, pictFile string, random io.Reader) (
 	index := startPos + 1
 	var inputs []string
 	var spanInputs *PICTSpanInputs
-	var traceID []byte
-	var parentID []byte
+	var traceID otlpcommon.TraceID
+	var parentID otlpcommon.SpanID
 	for i := 0; i < count; i++ {
 		if index >= pairsTotal {
 			index = 1
@@ -103,13 +75,13 @@ func GenerateSpans(count int, startPos int, pictFile string, random io.Reader) (
 		switch spanInputs.Parent {
 		case SpanParentRoot:
 			traceID = generateTraceID(random)
-			parentID = nil
+			parentID = otlpcommon.NewSpanID([8]byte{})
 		case SpanParentChild:
 			// use existing if available
-			if traceID == nil {
+			if !traceID.IsValid() {
 				traceID = generateTraceID(random)
 			}
-			if parentID == nil {
+			if !parentID.IsValid() {
 				parentID = generateSpanID(random)
 			}
 		}
@@ -126,15 +98,15 @@ func generateSpanName(spanInputs *PICTSpanInputs) string {
 		spanInputs.Attributes, spanInputs.Events, spanInputs.Links, spanInputs.Status)
 }
 
-//GenerateSpan generates a single OTLP Span based on the input values provided. They are:
-//  traceID - the trace ID to use, should not be nil
-//  parentID - the parent span ID or nil if it is a root span
-//  spanName - the span name, should not be blank
-//  spanInputs - the pairwise combination of field value variations for this span
-//  random - the random number generator to use in generating ID values
+// GenerateSpan generates a single OTLP Span based on the input values provided. They are:
+//   traceID - the trace ID to use, should not be nil
+//   parentID - the parent span ID or nil if it is a root span
+//   spanName - the span name, should not be blank
+//   spanInputs - the pairwise combination of field value variations for this span
+//   random - the random number generator to use in generating ID values
 //
-//The generated span is returned.
-func GenerateSpan(traceID []byte, parentID []byte, spanName string, spanInputs *PICTSpanInputs,
+// The generated span is returned.
+func GenerateSpan(traceID otlpcommon.TraceID, parentID otlpcommon.SpanID, spanName string, spanInputs *PICTSpanInputs,
 	random io.Reader) *otlptrace.Span {
 	endTime := time.Now().Add(-50 * time.Microsecond)
 	return &otlptrace.Span{
@@ -188,8 +160,8 @@ func lookupSpanKind(kind PICTInputKind) otlptrace.Span_SpanKind {
 	}
 }
 
-func generateSpanAttributes(spanTypeID PICTInputAttributes, statusStr PICTInputStatus) []*otlpcommon.KeyValue {
-	includeStatus := SpanStatusNil != statusStr
+func generateSpanAttributes(spanTypeID PICTInputAttributes, statusStr PICTInputStatus) []otlpcommon.KeyValue {
+	includeStatus := SpanStatusUnset != statusStr
 	var attrs map[string]interface{}
 	switch spanTypeID {
 	case SpanAttrNil:
@@ -233,7 +205,7 @@ func generateSpanAttributes(spanTypeID PICTInputAttributes, statusStr PICTInputS
 }
 
 func generateStatus(statusStr PICTInputStatus) *otlptrace.Status {
-	if SpanStatusNil == statusStr {
+	if SpanStatusUnset == statusStr {
 		return nil
 	}
 	return &otlptrace.Status{
@@ -435,8 +407,20 @@ func generateMaxCountAttributes(includeStatus bool) map[string]interface{} {
 	attrMap["ai-sampler.absolute"] = false
 	attrMap["ai-sampler.maxhops"] = int64(6)
 	attrMap["application.create.location"] = "https://api.opentelemetry.io/blog/posts/806673B9-4F4D-4284-9635-3A3E3E3805BE"
-	attrMap["application.svcmap"] = "Blogosphere"
-	attrMap["application.abflags"] = "UIx=false,UI4=true,flow-alt3=false"
+	stages := make([]*otlpcommon.AnyValue, 3)
+	stages[0] = &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "Launch"}}
+	stages[1] = &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "Injestion"}}
+	stages[2] = &otlpcommon.AnyValue{Value: &otlpcommon.AnyValue_StringValue{StringValue: "Validation"}}
+	attrMap["application.stages"] = &otlpcommon.ArrayValue{
+		Values: stages,
+	}
+	subMap := make(map[string]interface{})
+	subMap["UIx"] = false
+	subMap["UI4"] = true
+	subMap["flow-alt3"] = false
+	attrMap["application.abflags"] = &otlpcommon.KeyValueList{
+		Values: convertMapToAttributeKeyValues(subMap),
+	}
 	attrMap["application.thread"] = "proc-pool-14"
 	attrMap["application.session"] = ""
 	attrMap["application.persist.size"] = int64(1172184)
@@ -499,7 +483,7 @@ func generateSpanEvent(index int) *otlptrace.Span_Event {
 	}
 }
 
-func generateEventAttributes(index int) []*otlpcommon.KeyValue {
+func generateEventAttributes(index int) []otlpcommon.KeyValue {
 	if index%4 == 2 {
 		return nil
 	}
@@ -530,7 +514,7 @@ func generateSpanLink(random io.Reader, index int) *otlptrace.Span_Link {
 	}
 }
 
-func generateLinkAttributes(index int) []*otlpcommon.KeyValue {
+func generateLinkAttributes(index int) []otlpcommon.KeyValue {
 	if index%4 == 2 {
 		return nil
 	}

@@ -27,6 +27,7 @@ import (
 	"go.opentelemetry.io/collector/config/configcheck"
 	"go.opentelemetry.io/collector/config/configgrpc"
 	"go.opentelemetry.io/collector/config/configtls"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/testutil"
 )
 
@@ -35,6 +36,11 @@ func TestCreateDefaultConfig(t *testing.T) {
 	cfg := factory.CreateDefaultConfig()
 	assert.NotNil(t, cfg, "failed to create default config")
 	assert.NoError(t, configcheck.ValidateConfig(cfg))
+	ocfg, ok := factory.CreateDefaultConfig().(*Config)
+	assert.True(t, ok)
+	assert.Equal(t, ocfg.RetrySettings, exporterhelper.CreateDefaultRetrySettings())
+	assert.Equal(t, ocfg.QueueSettings, exporterhelper.CreateDefaultQueueSettings())
+	assert.Equal(t, ocfg.TimeoutSettings, exporterhelper.CreateDefaultTimeoutSettings())
 }
 
 func TestCreateMetricsExporter(t *testing.T) {
@@ -161,7 +167,7 @@ func TestCreateTraceExporter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			factory := NewFactory()
 			creationParams := component.ExporterCreateParams{Logger: zap.NewNop()}
-			consumer, err := factory.CreateTraceExporter(context.Background(), creationParams, &tt.config)
+			consumer, err := factory.CreateTracesExporter(context.Background(), creationParams, &tt.config)
 
 			if tt.mustFail {
 				assert.NotNil(t, err)

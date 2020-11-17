@@ -36,7 +36,6 @@ import (
 	jaegerthrift "github.com/jaegertracing/jaeger/thrift-gen/jaeger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opencensus.io/trace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -47,8 +46,8 @@ import (
 	"go.opentelemetry.io/collector/config/configgrpc"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configtls"
+	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/testutil"
 	"go.opentelemetry.io/collector/translator/conventions"
 	tracetranslator "go.opentelemetry.io/collector/translator/trace"
@@ -59,8 +58,7 @@ const jaegerReceiver = "jaeger_receiver_test"
 
 func TestTraceSource(t *testing.T) {
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, &configuration{}, nil, params)
-	assert.NoError(t, err, "should not have failed to create the Jaeger receiver")
+	jr := newJaegerReceiver(jaegerReceiver, &configuration{}, nil, params)
 	require.NotNil(t, jr)
 }
 
@@ -134,12 +132,11 @@ func TestReception(t *testing.T) {
 	config := &configuration{
 		CollectorHTTPPort: int(port), // that's the only one used by this test
 	}
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
-	assert.NoError(t, err, "should not have failed to create the Jaeger received")
 
 	t.Log("Starting")
 
@@ -168,11 +165,10 @@ func TestPortsNotOpen(t *testing.T) {
 	// an empty config should result in no open ports
 	config := &configuration{}
 
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
-	assert.NoError(t, err, "should not have failed to create a new receiver")
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
 
 	require.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()))
@@ -198,15 +194,13 @@ func TestGRPCReception(t *testing.T) {
 	config := &configuration{
 		CollectorGRPCPort: 14250, // that's the only one used by this test
 	}
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
-	assert.NoError(t, err, "should not have failed to create a new receiver")
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
 
 	require.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()))
-	t.Log("Start")
 
 	conn, err := grpc.Dial(fmt.Sprintf("0.0.0.0:%d", config.CollectorGRPCPort), grpc.WithInsecure())
 	require.NoError(t, err)
@@ -256,15 +250,13 @@ func TestGRPCReceptionWithTLS(t *testing.T) {
 		CollectorGRPCPort:    int(port),
 		CollectorGRPCOptions: grpcServerOptions,
 	}
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
-	assert.NoError(t, err, "should not have failed to create a new receiver")
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
 
 	require.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()))
-	t.Log("Start")
 
 	creds, err := credentials.NewClientTLSFromFile(path.Join(".", "testdata", "server.crt"), "localhost")
 	require.NoError(t, err)
@@ -297,15 +289,14 @@ func TestGRPCReceptionWithTLS(t *testing.T) {
 }
 
 func expectedTraceData(t1, t2, t3 time.Time) pdata.Traces {
-	traceID := pdata.TraceID(
-		[]byte{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80})
-	parentSpanID := pdata.SpanID([]byte{0x1F, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x18})
-	childSpanID := pdata.SpanID([]byte{0xAF, 0xAE, 0xAD, 0xAC, 0xAB, 0xAA, 0xA9, 0xA8})
+	traceID := pdata.NewTraceID(
+		[16]byte{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x80})
+	parentSpanID := pdata.NewSpanID([8]byte{0x1F, 0x1E, 0x1D, 0x1C, 0x1B, 0x1A, 0x19, 0x18})
+	childSpanID := pdata.NewSpanID([8]byte{0xAF, 0xAE, 0xAD, 0xAC, 0xAB, 0xAA, 0xA9, 0xA8})
 
 	traces := pdata.NewTraces()
 	traces.ResourceSpans().Resize(1)
 	rs := traces.ResourceSpans().At(0)
-	rs.Resource().InitEmpty()
 	rs.Resource().Attributes().InsertString(conventions.AttributeServiceName, "issaTest")
 	rs.Resource().Attributes().InsertBool("bool", true)
 	rs.Resource().Attributes().InsertString("string", "yes")
@@ -321,7 +312,7 @@ func expectedTraceData(t1, t2, t3 time.Time) pdata.Traces {
 	span0.SetStartTime(pdata.TimestampUnixNano(uint64(t1.UnixNano())))
 	span0.SetEndTime(pdata.TimestampUnixNano(uint64(t2.UnixNano())))
 	span0.Status().InitEmpty()
-	span0.Status().SetCode(pdata.StatusCodeNotFound)
+	span0.Status().SetCode(pdata.StatusCodeError)
 	span0.Status().SetMessage("Stale indices")
 
 	span1 := rs.InstrumentationLibrarySpans().At(0).Spans().At(1)
@@ -331,7 +322,7 @@ func expectedTraceData(t1, t2, t3 time.Time) pdata.Traces {
 	span1.SetStartTime(pdata.TimestampUnixNano(uint64(t2.UnixNano())))
 	span1.SetEndTime(pdata.TimestampUnixNano(uint64(t3.UnixNano())))
 	span1.Status().InitEmpty()
-	span1.Status().SetCode(pdata.StatusCodeInternalError)
+	span1.Status().SetCode(pdata.StatusCodeError)
 	span1.Status().SetMessage("Frontend crash")
 
 	return traces
@@ -362,7 +353,7 @@ func grpcFixture(t1 time.Time, d1, d2 time.Duration) *api_v2.PostSpansRequest {
 					Duration:      d1,
 					Tags: []model.KeyValue{
 						model.String(tracetranslator.TagStatusMsg, "Stale indices"),
-						model.Int64(tracetranslator.TagStatusCode, trace.StatusCodeNotFound),
+						model.Int64(tracetranslator.TagStatusCode, int64(pdata.StatusCodeError)),
 						model.Bool("error", true),
 					},
 					References: []model.SpanRef{
@@ -381,7 +372,7 @@ func grpcFixture(t1 time.Time, d1, d2 time.Duration) *api_v2.PostSpansRequest {
 					Duration:      d2,
 					Tags: []model.KeyValue{
 						model.String(tracetranslator.TagStatusMsg, "Frontend crash"),
-						model.Int64(tracetranslator.TagStatusCode, trace.StatusCodeInternal),
+						model.Int64(tracetranslator.TagStatusCode, int64(pdata.StatusCodeError)),
 						model.Bool("error", true),
 					},
 				},
@@ -396,11 +387,10 @@ func TestSampling(t *testing.T) {
 		CollectorGRPCPort:          int(port),
 		RemoteSamplingStrategyFile: "testdata/strategies.json",
 	}
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
-	assert.NoError(t, err, "should not have failed to create a new receiver")
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
 
 	require.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()))
@@ -449,11 +439,10 @@ func TestSamplingFailsOnNotConfigured(t *testing.T) {
 	config := &configuration{
 		CollectorGRPCPort: int(port),
 	}
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
-	assert.NoError(t, err, "should not have failed to create a new receiver")
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
 
 	require.NoError(t, jr.Start(context.Background(), componenttest.NewNopHost()))
@@ -479,11 +468,10 @@ func TestSamplingFailsOnBadFile(t *testing.T) {
 		CollectorGRPCPort:          int(port),
 		RemoteSamplingStrategyFile: "does-not-exist",
 	}
-	sink := new(exportertest.SinkTraceExporter)
+	sink := new(consumertest.TracesSink)
 
 	params := component.ReceiverCreateParams{Logger: zap.NewNop()}
-	jr, err := newJaegerReceiver(jaegerReceiver, config, sink, params)
-	assert.NoError(t, err, "should not have failed to create a new receiver")
+	jr := newJaegerReceiver(jaegerReceiver, config, sink, params)
 	defer jr.Shutdown(context.Background())
 	assert.Error(t, jr.Start(context.Background(), componenttest.NewNopHost()))
 }
@@ -515,7 +503,7 @@ func TestSamplingStrategiesMutualTLS(t *testing.T) {
 	defer server.GracefulStop()
 
 	// Create sampling strategies receiver
-	port, err := randomAvailablePort()
+	port := testutil.GetAvailablePort(t)
 	require.NoError(t, err)
 	hostEndpoint := fmt.Sprintf("localhost:%d", port)
 	factory := NewFactory()
@@ -536,12 +524,12 @@ func TestSamplingStrategiesMutualTLS(t *testing.T) {
 		HostEndpoint: hostEndpoint,
 	}
 	// at least one protocol has to be enabled
-	thriftHTTPPort, err := randomAvailablePort()
+	thriftHTTPPort := testutil.GetAvailablePort(t)
 	require.NoError(t, err)
 	cfg.Protocols.ThriftHTTP = &confighttp.HTTPServerSettings{
 		Endpoint: fmt.Sprintf("localhost:%d", thriftHTTPPort),
 	}
-	exp, err := factory.CreateTraceReceiver(context.Background(), component.ReceiverCreateParams{Logger: zap.NewNop()}, cfg, exportertest.NewNopTraceExporter())
+	exp, err := factory.CreateTracesReceiver(context.Background(), component.ReceiverCreateParams{Logger: zap.NewNop()}, cfg, consumertest.NewTracesNop())
 	require.NoError(t, err)
 	host := &componenttest.ErrorWaitingHost{}
 	err = exp.Start(context.Background(), host)
@@ -555,15 +543,6 @@ func TestSamplingStrategiesMutualTLS(t *testing.T) {
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, "{\"strategyType\":1,\"rateLimitingSampling\":{\"maxTracesPerSecond\":5}}", string(bodyBytes))
-}
-
-func randomAvailablePort() (int, error) {
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return 0, err
-	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
 func TestConsumeThriftTrace(t *testing.T) {
@@ -580,7 +559,7 @@ func TestConsumeThriftTrace(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		numSpans, err := consumeTraces(context.Background(), test.batch, exportertest.NewNopTraceExporter())
+		numSpans, err := consumeTraces(context.Background(), test.batch, consumertest.NewTracesNop())
 		require.NoError(t, err)
 		assert.Equal(t, test.numSpans, numSpans)
 	}

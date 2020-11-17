@@ -15,6 +15,8 @@
 package jaeger
 
 import (
+	"io"
+	"math/rand"
 	"testing"
 
 	"github.com/jaegertracing/jaeger/model"
@@ -22,7 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/collector/consumer/pdata"
+	otlptrace "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/trace/v1"
 	"go.opentelemetry.io/collector/internal/data/testdata"
+	"go.opentelemetry.io/collector/internal/goldendataset"
 	"go.opentelemetry.io/collector/translator/conventions"
 	tracetranslator "go.opentelemetry.io/collector/translator/trace"
 )
@@ -44,21 +48,11 @@ func TestGetTagFromStatusCode(t *testing.T) {
 		},
 
 		{
-			name: "unknown",
-			code: pdata.StatusCodeUnknownError,
+			name: "error",
+			code: pdata.StatusCodeError,
 			tag: model.KeyValue{
 				Key:    tracetranslator.TagStatusCode,
-				VInt64: int64(pdata.StatusCodeUnknownError),
-				VType:  model.ValueType_INT64,
-			},
-		},
-
-		{
-			name: "not-found",
-			code: pdata.StatusCodeNotFound,
-			tag: model.KeyValue{
-				Key:    tracetranslator.TagStatusCode,
-				VInt64: int64(pdata.StatusCodeNotFound),
+				VInt64: int64(pdata.StatusCodeError),
 				VType:  model.ValueType_INT64,
 			},
 		},
@@ -80,14 +74,13 @@ func TestGetErrorTagFromStatusCode(t *testing.T) {
 		VType: model.ValueType_BOOL,
 	}
 
-	_, ok := getErrorTagFromStatusCode(pdata.StatusCodeOk)
+	_, ok := getErrorTagFromStatusCode(pdata.StatusCodeUnset)
 	assert.False(t, ok)
 
-	got, ok := getErrorTagFromStatusCode(pdata.StatusCodeUnknownError)
-	assert.True(t, ok)
-	assert.EqualValues(t, errTag, got)
+	_, ok = getErrorTagFromStatusCode(pdata.StatusCodeOk)
+	assert.False(t, ok)
 
-	got, ok = getErrorTagFromStatusCode(pdata.StatusCodeNotFound)
+	got, ok := getErrorTagFromStatusCode(pdata.StatusCodeError)
 	assert.True(t, ok)
 	assert.EqualValues(t, errTag, got)
 }
@@ -234,7 +227,7 @@ func TestInternalTracesToJaegerProto(t *testing.T) {
 	tests := []struct {
 		name string
 		td   pdata.Traces
-		jb   model.Batch
+		jb   *model.Batch
 		err  error
 	}{
 		{
@@ -246,7 +239,7 @@ func TestInternalTracesToJaegerProto(t *testing.T) {
 		{
 			name: "no-spans",
 			td:   generateTraceDataResourceOnly(),
-			jb: model.Batch{
+			jb: &model.Batch{
 				Process: generateProtoProcess(),
 			},
 			err: nil,
@@ -255,20 +248,15 @@ func TestInternalTracesToJaegerProto(t *testing.T) {
 		{
 			name: "no-resource-attrs",
 			td:   generateTraceDataResourceOnlyWithNoAttrs(),
-			jb: model.Batch{
-				Process: &model.Process{
-					ServiceName: tracetranslator.ResourceNoAttrs,
-				},
-			},
-			err: nil,
+			err:  nil,
 		},
 
 		{
 			name: "one-span-no-resources",
 			td:   generateTraceDataOneSpanNoResourceWithTraceState(),
-			jb: model.Batch{
+			jb: &model.Batch{
 				Process: &model.Process{
-					ServiceName: tracetranslator.ResourceNotSet,
+					ServiceName: tracetranslator.ResourceNoServiceName,
 				},
 				Spans: []*model.Span{
 					generateProtoSpanWithTraceState(),
@@ -277,11 +265,24 @@ func TestInternalTracesToJaegerProto(t *testing.T) {
 			err: nil,
 		},
 		{
+			name: "library-info",
+			td:   generateTraceDataWithLibraryInfo(),
+			jb: &model.Batch{
+				Process: &model.Process{
+					ServiceName: tracetranslator.ResourceNoServiceName,
+				},
+				Spans: []*model.Span{
+					generateProtoSpanWithLibraryInfo("io.opentelemetry.test"),
+				},
+			},
+			err: nil,
+		},
+		{
 			name: "two-spans-child-parent",
 			td:   generateTraceDataTwoSpansChildParent(),
-			jb: model.Batch{
+			jb: &model.Batch{
 				Process: &model.Process{
-					ServiceName: tracetranslator.ResourceNotSet,
+					ServiceName: tracetranslator.ResourceNoServiceName,
 				},
 				Spans: []*model.Span{
 					generateProtoSpan(),
@@ -294,9 +295,9 @@ func TestInternalTracesToJaegerProto(t *testing.T) {
 		{
 			name: "two-spans-with-follower",
 			td:   generateTraceDataTwoSpansWithFollower(),
-			jb: model.Batch{
+			jb: &model.Batch{
 				Process: &model.Process{
-					ServiceName: tracetranslator.ResourceNotSet,
+					ServiceName: tracetranslator.ResourceNoServiceName,
 				},
 				Spans: []*model.Span{
 					generateProtoSpan(),
@@ -311,13 +312,31 @@ func TestInternalTracesToJaegerProto(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			jbs, err := InternalTracesToJaegerProto(test.td)
 			assert.EqualValues(t, test.err, err)
-			if test.name == "empty" {
-				assert.Nil(t, jbs)
+			if test.jb == nil {
+				assert.Len(t, jbs, 0)
 			} else {
-				assert.Equal(t, 1, len(jbs))
-				assert.EqualValues(t, test.jb, *jbs[0])
+				require.Equal(t, 1, len(jbs))
+				assert.EqualValues(t, test.jb, jbs[0])
 			}
 		})
+	}
+}
+
+func TestInternalTracesToJaegerProtoBatchesAndBack(t *testing.T) {
+	rscSpans, err := goldendataset.GenerateResourceSpans(
+		"../../../internal/goldendataset/testdata/generated_pict_pairs_traces.txt",
+		"../../../internal/goldendataset/testdata/generated_pict_pairs_spans.txt",
+		io.Reader(rand.New(rand.NewSource(2004))))
+	assert.NoError(t, err)
+	for _, rs := range rscSpans {
+		orig := make([]*otlptrace.ResourceSpans, 1)
+		orig[0] = rs
+		td := pdata.TracesFromOtlp(orig)
+		protoBatches, err := InternalTracesToJaegerProto(td)
+		assert.NoError(t, err)
+		tdFromPB := ProtoBatchesToInternalTraces(protoBatches)
+		assert.NotNil(t, tdFromPB)
+		assert.Equal(t, td.SpanCount(), tdFromPB.SpanCount())
 	}
 }
 
@@ -330,7 +349,7 @@ func generateProtoChildSpanWithErrorTags() *model.Span {
 	span.Tags = append(span.Tags, model.KeyValue{
 		Key:    tracetranslator.TagStatusCode,
 		VType:  model.ValueType_INT64,
-		VInt64: tracetranslator.OCNotFound,
+		VInt64: int64(pdata.StatusCodeError),
 	})
 	span.Tags = append(span.Tags, model.KeyValue{
 		Key:   tracetranslator.TagError,

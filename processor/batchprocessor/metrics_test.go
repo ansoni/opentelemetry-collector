@@ -18,32 +18,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"go.opentelemetry.io/collector/internal/collector/telemetry"
 )
 
 func TestBatchProcessorMetrics(t *testing.T) {
-	tests := []struct {
-		viewNames []string
-		level     telemetry.Level
-	}{
-		{
-			viewNames: []string{"batch_size_trigger_send", "timeout_trigger_send", "batch_send_size", "batch_send_size_bytes"},
-			level:     telemetry.Detailed,
-		},
-		{
-			viewNames: []string{},
-			level:     telemetry.None,
-		},
+	viewNames := []string{
+		"batch_size_trigger_send",
+		"timeout_trigger_send",
+		"batch_send_size",
+		"batch_send_size_bytes",
 	}
-	for _, test := range tests {
-		views := MetricViews(test.level)
-		if test.viewNames == nil {
-			assert.Nil(t, views)
-			continue
-		}
-		for i, viewName := range test.viewNames {
-			assert.Equal(t, viewName, views[i].Name)
-		}
+	views := MetricViews()
+	for i, viewName := range viewNames {
+		assert.Equal(t, "processor/batch/"+viewName, views[i].Name)
 	}
 }

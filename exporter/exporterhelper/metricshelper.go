@@ -17,23 +17,14 @@ package exporterhelper
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configmodels"
-	"go.opentelemetry.io/collector/consumer/consumerdata"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
 	"go.opentelemetry.io/collector/obsreport"
 )
-
-// NumTimeSeries returns the number of timeseries in a MetricsData.
-func NumTimeSeries(md consumerdata.MetricsData) int {
-	receivedTimeSeries := 0
-	for _, metric := range md.Metrics {
-		receivedTimeSeries += len(metric.GetTimeseries())
-	}
-	return receivedTimeSeries
-}
 
 // PushMetricsData is a helper function that is similar to ConsumeMetricsData but also returns
 // the number of dropped metrics.
@@ -53,9 +44,8 @@ func newMetricsRequest(ctx context.Context, md pdata.Metrics, pusher PushMetrics
 	}
 }
 
-func (req *metricsRequest) onPartialError(consumererror.PartialError) request {
-	// TODO: implement this.
-	return req
+func (req *metricsRequest) onPartialError(partialErr consumererror.PartialError) request {
+	return newMetricsRequest(req.ctx, partialErr.GetMetrics(), req.pusher)
 }
 
 func (req *metricsRequest) export(ctx context.Context) (int, error) {
@@ -63,7 +53,7 @@ func (req *metricsRequest) export(ctx context.Context) (int, error) {
 }
 
 func (req *metricsRequest) count() int {
-	_, numPoints := pdatautil.MetricAndDataPointCount(req.md)
+	_, numPoints := req.md.MetricAndDataPointCount()
 	return numPoints
 }
 
@@ -73,6 +63,9 @@ type metricsExporter struct {
 }
 
 func (mexp *metricsExporter) ConsumeMetrics(ctx context.Context, md pdata.Metrics) error {
+	if mexp.baseExporter.convertResourceToTelemetry {
+		md = convertResourceToLabels(md)
+	}
 	exporterCtx := obsreport.ExporterContext(ctx, mexp.cfg.Name())
 	req := newMetricsRequest(exporterCtx, md, mexp.pusher)
 	_, err := mexp.sender.send(req)
@@ -80,16 +73,25 @@ func (mexp *metricsExporter) ConsumeMetrics(ctx context.Context, md pdata.Metric
 }
 
 // NewMetricsExporter creates an MetricsExporter that records observability metrics and wraps every request with a Span.
-func NewMetricsExporter(cfg configmodels.Exporter, pushMetricsData PushMetricsData, options ...ExporterOption) (component.MetricsExporter, error) {
+func NewMetricsExporter(
+	cfg configmodels.Exporter,
+	logger *zap.Logger,
+	pushMetricsData PushMetricsData,
+	options ...ExporterOption,
+) (component.MetricsExporter, error) {
 	if cfg == nil {
 		return nil, errNilConfig
+	}
+
+	if logger == nil {
+		return nil, errNilLogger
 	}
 
 	if pushMetricsData == nil {
 		return nil, errNilPushMetricsData
 	}
 
-	be := newBaseExporter(cfg, options...)
+	be := newBaseExporter(cfg, logger, options...)
 	be.wrapConsumerSender(func(nextSender requestSender) requestSender {
 		return &metricsSenderWithObservability{
 			exporterName: cfg.Name(),
@@ -110,14 +112,14 @@ type metricsSenderWithObservability struct {
 
 func (mewo *metricsSenderWithObservability) send(req request) (int, error) {
 	req.setContext(obsreport.StartMetricsExportOp(req.context(), mewo.exporterName))
-	numDroppedMetrics, err := mewo.nextSender.send(req)
+	_, err := mewo.nextSender.send(req)
 
 	// TODO: this is not ideal: it should come from the next function itself.
 	// 	temporarily loading it from internal format. Once full switch is done
 	// 	to new metrics will remove this.
 	mReq := req.(*metricsRequest)
-	numReceivedMetrics, numPoints := pdatautil.MetricAndDataPointCount(mReq.md)
+	numReceivedMetrics, numPoints := mReq.md.MetricAndDataPointCount()
 
-	obsreport.EndMetricsExportOp(req.context(), numPoints, numReceivedMetrics, numDroppedMetrics, err)
+	obsreport.EndMetricsExportOp(req.context(), numPoints, err)
 	return numReceivedMetrics, err
 }

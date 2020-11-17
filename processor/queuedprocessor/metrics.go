@@ -19,7 +19,6 @@ import (
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 
-	"go.opentelemetry.io/collector/internal/collector/telemetry"
 	"go.opentelemetry.io/collector/obsreport"
 	"go.opentelemetry.io/collector/processor"
 )
@@ -58,15 +57,8 @@ var (
 )
 
 // MetricViews return the metrics views according to given telemetry level.
-func MetricViews(level telemetry.Level) []*view.View {
-	if level == telemetry.None {
-		return nil
-	}
-
-	tagKeys := processor.MetricTagKeys(level)
-	if tagKeys == nil {
-		return nil
-	}
+func MetricViews() []*view.View {
+	tagKeys := processor.MetricTagKeys()
 
 	countSuccessSendView := &view.View{
 		Name:        statSuccessSendOps.Name(),

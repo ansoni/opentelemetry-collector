@@ -15,6 +15,7 @@
 package internaldata
 
 import (
+	"strconv"
 	"testing"
 
 	occommon "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
@@ -27,12 +28,14 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.opentelemetry.io/collector/consumer/pdata"
+	otlptrace "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/trace/v1"
+	"go.opentelemetry.io/collector/internal/goldendataset"
 	"go.opentelemetry.io/collector/translator/conventions"
+	tracetranslator "go.opentelemetry.io/collector/translator/trace"
 )
 
 func TestResourceToOC(t *testing.T) {
 	emptyResource := pdata.NewResource()
-	emptyResource.InitEmpty()
 
 	ocNode := generateOcNode()
 	ocResource := generateOcResource()
@@ -57,8 +60,8 @@ func TestResourceToOC(t *testing.T) {
 		{
 			name:       "empty",
 			resource:   emptyResource,
-			ocNode:     &occommon.Node{},
-			ocResource: &ocresource.Resource{},
+			ocNode:     nil,
+			ocResource: nil,
 		},
 
 		{
@@ -80,7 +83,6 @@ func TestResourceToOC(t *testing.T) {
 
 func TestContainerResourceToOC(t *testing.T) {
 	resource := pdata.NewResource()
-	resource.InitEmpty()
 	resource.Attributes().InitFromMap(map[string]pdata.AttributeValue{
 		conventions.AttributeK8sCluster:    pdata.NewAttributeValueString("cluster1"),
 		conventions.AttributeK8sPod:        pdata.NewAttributeValueString("pod1"),
@@ -118,30 +120,30 @@ func TestContainerResourceToOC(t *testing.T) {
 }
 
 func TestAttributeValueToString(t *testing.T) {
-	assert.EqualValues(t, "", attributeValueToString(pdata.NewAttributeValueNull(), false))
-	assert.EqualValues(t, "abc", attributeValueToString(pdata.NewAttributeValueString("abc"), false))
-	assert.EqualValues(t, `"abc"`, attributeValueToString(pdata.NewAttributeValueString("abc"), true))
-	assert.EqualValues(t, "123", attributeValueToString(pdata.NewAttributeValueInt(123), false))
-	assert.EqualValues(t, "1.23", attributeValueToString(pdata.NewAttributeValueDouble(1.23), false))
-	assert.EqualValues(t, "true", attributeValueToString(pdata.NewAttributeValueBool(true), false))
+	assert.EqualValues(t, "", tracetranslator.AttributeValueToString(pdata.NewAttributeValueNull(), false))
+	assert.EqualValues(t, "abc", tracetranslator.AttributeValueToString(pdata.NewAttributeValueString("abc"), false))
+	assert.EqualValues(t, `"abc"`, tracetranslator.AttributeValueToString(pdata.NewAttributeValueString("abc"), true))
+	assert.EqualValues(t, "123", tracetranslator.AttributeValueToString(pdata.NewAttributeValueInt(123), false))
+	assert.EqualValues(t, "1.23", tracetranslator.AttributeValueToString(pdata.NewAttributeValueDouble(1.23), false))
+	assert.EqualValues(t, "true", tracetranslator.AttributeValueToString(pdata.NewAttributeValueBool(true), false))
 
 	v := pdata.NewAttributeValueMap()
 	v.MapVal().InsertString(`a"\`, `b"\`)
 	v.MapVal().InsertInt("c", 123)
 	v.MapVal().Insert("d", pdata.NewAttributeValueNull())
 	v.MapVal().Insert("e", v)
-	assert.EqualValues(t, `{"a\"\\":"b\"\\","c":123,"d":null,"e":{"a\"\\":"b\"\\","c":123,"d":null}}`, attributeValueToString(v, false))
+	assert.EqualValues(t, `{"a\"\\":"b\"\\","c":123,"d":null,"e":{"a\"\\":"b\"\\","c":123,"d":null}}`, tracetranslator.AttributeValueToString(v, false))
 
 	v = pdata.NewAttributeValueArray()
 	av := pdata.NewAttributeValueString(`b"\`)
-	v.ArrayVal().Append(&av)
+	v.ArrayVal().Append(av)
 	av = pdata.NewAttributeValueInt(123)
-	v.ArrayVal().Append(&av)
+	v.ArrayVal().Append(av)
 	av = pdata.NewAttributeValueNull()
-	v.ArrayVal().Append(&av)
+	v.ArrayVal().Append(av)
 	av = pdata.NewAttributeValueArray()
-	v.ArrayVal().Append(&av)
-	assert.EqualValues(t, `["b\"\\",123,null,[]]`, attributeValueToString(v, false))
+	v.ArrayVal().Append(av)
+	assert.EqualValues(t, `["b\"\\",123,null,"\u003cInvalid array value\u003e"]`, tracetranslator.AttributeValueToString(v, false))
 }
 
 func TestInferResourceType(t *testing.T) {
@@ -212,6 +214,48 @@ func TestInferResourceType(t *testing.T) {
 				assert.False(t, ok)
 				assert.Equal(t, "", resourceType)
 			}
+		})
+	}
+}
+
+func TestResourceToOCAndBack(t *testing.T) {
+	tests := []goldendataset.PICTInputResource{
+		goldendataset.ResourceNil,
+		goldendataset.ResourceEmpty,
+		goldendataset.ResourceVMOnPrem,
+		goldendataset.ResourceVMCloud,
+		goldendataset.ResourceK8sOnPrem,
+		goldendataset.ResourceK8sCloud,
+		goldendataset.ResourceFaas,
+		goldendataset.ResourceExec,
+	}
+	for _, test := range tests {
+		t.Run(string(test), func(t *testing.T) {
+			rSpans := make([]*otlptrace.ResourceSpans, 1)
+			rSpans[0] = &otlptrace.ResourceSpans{
+				Resource:                    goldendataset.GenerateResource(test),
+				InstrumentationLibrarySpans: nil,
+			}
+			traces := pdata.TracesFromOtlp(rSpans)
+			expected := traces.ResourceSpans().At(0).Resource()
+			ocNode, ocResource := internalResourceToOC(expected)
+			actual := pdata.NewResource()
+			ocNodeResourceToInternal(ocNode, ocResource, actual)
+			// Remove opencensus resource type from actual. This will be added during translation.
+			actual.Attributes().Delete(conventions.OCAttributeResourceType)
+			assert.Equal(t, expected.Attributes().Len(), actual.Attributes().Len())
+			expected.Attributes().ForEach(func(k string, v pdata.AttributeValue) {
+				a, ok := actual.Attributes().Get(k)
+				assert.True(t, ok)
+				switch v.Type() {
+				case pdata.AttributeValueINT:
+					assert.Equal(t, strconv.FormatInt(v.IntVal(), 10), a.StringVal())
+				case pdata.AttributeValueMAP, pdata.AttributeValueARRAY:
+					assert.Equal(t, a, a)
+				default:
+					assert.Equal(t, v, a)
+				}
+			})
 		})
 	}
 }

@@ -23,6 +23,7 @@ import (
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 
+	"go.opentelemetry.io/collector/config/configtelemetry"
 	"go.opentelemetry.io/collector/obsreport"
 )
 
@@ -34,6 +35,7 @@ var (
 	// that are used to monitor the Collector in production deployments.
 	// DO NOT SWITCH THE VARIABLES BELOW TO SIMILAR ONES DEFINED ON THE PACKAGE.
 	receiverTag, _  = tag.NewKey("receiver")
+	scraperTag, _   = tag.NewKey("scraper")
 	transportTag, _ = tag.NewKey("transport")
 	exporterTag, _  = tag.NewKey("exporter")
 	processorTag, _ = tag.NewKey("processor")
@@ -42,7 +44,7 @@ var (
 // SetupRecordedMetricsTest does setup the testing environment to check the metrics recorded by receivers, producers or exporters.
 // The returned function should be deferred.
 func SetupRecordedMetricsTest() (func(), error) {
-	views := obsreport.Configure(true, true)
+	views := obsreport.Configure(configtelemetry.LevelNormal)
 	err := view.Register(views...)
 	if err != nil {
 		return nil, err
@@ -112,12 +114,28 @@ func CheckReceiverTracesViews(t *testing.T, receiver, protocol string, acceptedS
 	CheckValueForView(t, receiverTags, droppedSpans, "receiver/refused_spans")
 }
 
+// CheckReceiverLogsViews checks that for the current exported values for logs receiver views match given values.
+// When this function is called it is required to also call SetupRecordedMetricsTest as first thing.
+func CheckReceiverLogsViews(t *testing.T, receiver, protocol string, acceptedLogRecords, droppedLogRecords int64) {
+	receiverTags := tagsForReceiverView(receiver, protocol)
+	CheckValueForView(t, receiverTags, acceptedLogRecords, "receiver/accepted_log_records")
+	CheckValueForView(t, receiverTags, droppedLogRecords, "receiver/refused_log_records")
+}
+
 // CheckReceiverMetricsViews checks that for the current exported values for metrics receiver views match given values.
 // When this function is called it is required to also call SetupRecordedMetricsTest as first thing.
 func CheckReceiverMetricsViews(t *testing.T, receiver, protocol string, acceptedMetricPoints, droppedMetricPoints int64) {
 	receiverTags := tagsForReceiverView(receiver, protocol)
 	CheckValueForView(t, receiverTags, acceptedMetricPoints, "receiver/accepted_metric_points")
 	CheckValueForView(t, receiverTags, droppedMetricPoints, "receiver/refused_metric_points")
+}
+
+// CheckScraperMetricsViews checks that for the current exported values for metrics scraper views match given values.
+// When this function is called it is required to also call SetupRecordedMetricsTest as first thing.
+func CheckScraperMetricsViews(t *testing.T, receiver, scraper string, scrapedMetricPoints, erroredMetricPoints int64) {
+	scraperTags := tagsForScraperView(receiver, scraper)
+	CheckValueForView(t, scraperTags, scrapedMetricPoints, "scraper/scraped_metric_points")
+	CheckValueForView(t, scraperTags, erroredMetricPoints, "scraper/errored_metric_points")
 }
 
 // CheckValueForView checks that for the current exported value in the view with the given name
@@ -144,10 +162,26 @@ func CheckValueForView(t *testing.T, wantTags []tag.Tag, value int64, vName stri
 
 // tagsForReceiverView returns the tags that are needed for the receiver views.
 func tagsForReceiverView(receiver, transport string) []tag.Tag {
-	return []tag.Tag{
-		{Key: receiverTag, Value: receiver},
-		{Key: transportTag, Value: transport},
+	tags := make([]tag.Tag, 0, 2)
+
+	tags = append(tags, tag.Tag{Key: receiverTag, Value: receiver})
+	if transport != "" {
+		tags = append(tags, tag.Tag{Key: transportTag, Value: transport})
 	}
+
+	return tags
+}
+
+// tagsForScraperView returns the tags that are needed for the scraper views.
+func tagsForScraperView(receiver, scraper string) []tag.Tag {
+	tags := make([]tag.Tag, 0, 2)
+
+	tags = append(tags, tag.Tag{Key: receiverTag, Value: receiver})
+	if scraper != "" {
+		tags = append(tags, tag.Tag{Key: scraperTag, Value: scraper})
+	}
+
+	return tags
 }
 
 // tagsForProcessorView returns the tags that are needed for the processor views.

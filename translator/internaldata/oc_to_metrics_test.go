@@ -35,7 +35,7 @@ func TestOCToMetrics(t *testing.T) {
 	ih.SetDataType(pdata.MetricDataTypeDoubleHistogram)
 	dh.DoubleHistogram().CopyTo(ih.DoubleHistogram())
 
-	sampleMetricData := testdata.GenerateMetricsWithCountersHistograms()
+	sampleMetricData := testdata.GeneratMetricsAllTypesWithSampleDatapoints()
 	dh = sampleMetricData.ResourceMetrics().At(0).InstrumentationLibraryMetrics().At(0).Metrics().At(2)
 	ih = sampleMetricData.ResourceMetrics().At(0).InstrumentationLibraryMetrics().At(0).Metrics().At(3)
 	ih.SetDataType(pdata.MetricDataTypeDoubleHistogram)
@@ -58,7 +58,7 @@ func TestOCToMetrics(t *testing.T) {
 				Node:     &occommon.Node{},
 				Resource: &ocresource.Resource{},
 			},
-			internal: wrapMetricsWithEmptyResource(testdata.GenerateMetricsOneEmptyResourceMetrics()),
+			internal: testdata.GenerateMetricsOneEmptyResourceMetrics(),
 		},
 
 		{
@@ -91,10 +91,10 @@ func TestOCToMetrics(t *testing.T) {
 				Resource: generateOCTestResource(),
 				Metrics: []*ocmetrics.Metric{
 					generateOCTestMetricInt(),
-					generateOCTestMetricSummary(),
+					generateOCTestMetricDoubleSummary(),
 				},
 			},
-			internal: testdata.GenerateMetricsOneMetricOneNil(),
+			internal: testdata.GenerateMetricsOneCounterOneSummaryMetrics(),
 		},
 
 		{
@@ -130,6 +130,7 @@ func TestOCToMetrics(t *testing.T) {
 					generateOCTestMetricDouble(),
 					generateOCTestMetricDoubleHistogram(),
 					generateOCTestMetricIntHistogram(),
+					generateOCTestMetricDoubleSummary(),
 				},
 			},
 			internal: sampleMetricData,
@@ -157,12 +158,6 @@ func TestOCToMetrics(t *testing.T) {
 	}
 }
 
-// TODO: Try to avoid unnecessary Resource object allocation.
-func wrapMetricsWithEmptyResource(md pdata.Metrics) pdata.Metrics {
-	md.ResourceMetrics().At(0).Resource().InitEmpty()
-	return md
-}
-
 func TestOCToMetrics_ResourceInMetric(t *testing.T) {
 	internal := testdata.GenerateMetricsOneMetric()
 	want := pdata.NewMetrics()
@@ -174,6 +169,19 @@ func TestOCToMetrics_ResourceInMetric(t *testing.T) {
 	oc.Metrics = append(oc.Metrics, oc2.Metrics...)
 	oc.Metrics[1].Resource = oc2.Resource
 	oc.Metrics[1].Resource.Labels["resource-attr"] = "another-value"
+	got := OCToMetrics(oc)
+	assert.EqualValues(t, want, got)
+}
+
+func TestOCToMetrics_ResourceInMetricOnly(t *testing.T) {
+	internal := testdata.GenerateMetricsOneMetric()
+	want := pdata.NewMetrics()
+	internal.Clone().ResourceMetrics().MoveAndAppendTo(want.ResourceMetrics())
+	oc := generateOCTestDataMetricsOneMetric()
+	// Move resource to metric level.
+	// We shouldn't have a "combined" resource after conversion
+	oc.Metrics[0].Resource = oc.Resource
+	oc.Resource = nil
 	got := OCToMetrics(oc)
 	assert.EqualValues(t, want, got)
 }

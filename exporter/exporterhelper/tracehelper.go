@@ -17,6 +17,8 @@ package exporterhelper
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configmodels"
 	"go.opentelemetry.io/collector/consumer/consumererror"
@@ -66,22 +68,27 @@ func (texp *traceExporter) ConsumeTraces(ctx context.Context, td pdata.Traces) e
 	return err
 }
 
-// NewTraceExporter creates a TraceExporter that records observability metrics and wraps every request with a Span.
+// NewTraceExporter creates a TracesExporter that records observability metrics and wraps every request with a Span.
 func NewTraceExporter(
 	cfg configmodels.Exporter,
+	logger *zap.Logger,
 	dataPusher traceDataPusher,
 	options ...ExporterOption,
-) (component.TraceExporter, error) {
+) (component.TracesExporter, error) {
 
 	if cfg == nil {
 		return nil, errNilConfig
+	}
+
+	if logger == nil {
+		return nil, errNilLogger
 	}
 
 	if dataPusher == nil {
 		return nil, errNilPushTraceData
 	}
 
-	be := newBaseExporter(cfg, options...)
+	be := newBaseExporter(cfg, logger, options...)
 	be.wrapConsumerSender(func(nextSender requestSender) requestSender {
 		return &tracesExporterWithObservability{
 			exporterName: cfg.Name(),
@@ -108,6 +115,6 @@ func (tewo *tracesExporterWithObservability) send(req request) (int, error) {
 	// TODO: this is not ideal: it should come from the next function itself.
 	// 	temporarily loading it from internal format. Once full switch is done
 	// 	to new metrics will remove this.
-	obsreport.EndTraceDataExportOp(req.context(), req.count(), droppedSpans, err)
+	obsreport.EndTraceDataExportOp(req.context(), req.count(), err)
 	return droppedSpans, err
 }

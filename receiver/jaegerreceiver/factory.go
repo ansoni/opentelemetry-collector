@@ -128,11 +128,13 @@ func createDefaultConfig() configmodels.Receiver {
 			ThriftHTTP: &confighttp.HTTPServerSettings{
 				Endpoint: defaultHTTPBindEndpoint,
 			},
-			ThriftBinary: &confignet.TCPAddr{
-				Endpoint: defaultThriftBinaryBindEndpoint,
+			ThriftBinary: &ProtocolUDP{
+				Endpoint:        defaultThriftBinaryBindEndpoint,
+				ServerConfigUDP: DefaultServerConfigUDP(),
 			},
-			ThriftCompact: &confignet.TCPAddr{
-				Endpoint: defaultThriftCompactBindEndpoint,
+			ThriftCompact: &ProtocolUDP{
+				Endpoint:        defaultThriftCompactBindEndpoint,
+				ServerConfigUDP: DefaultServerConfigUDP(),
 			},
 		},
 	}
@@ -143,8 +145,8 @@ func createTraceReceiver(
 	_ context.Context,
 	params component.ReceiverCreateParams,
 	cfg configmodels.Receiver,
-	nextConsumer consumer.TraceConsumer,
-) (component.TraceReceiver, error) {
+	nextConsumer consumer.TracesConsumer,
+) (component.TracesReceiver, error) {
 
 	// Convert settings in the source config to configuration struct
 	// that Jaeger receiver understands.
@@ -152,8 +154,7 @@ func createTraceReceiver(
 	rCfg := cfg.(*Config)
 	remoteSamplingConfig := rCfg.RemoteSampling
 
-	config := configuration{}
-
+	var config configuration
 	// Set ports
 	if rCfg.Protocols.GRPC != nil {
 		var err error
@@ -177,6 +178,7 @@ func createTraceReceiver(
 	}
 
 	if rCfg.Protocols.ThriftBinary != nil {
+		config.AgentBinaryThriftConfig = rCfg.ThriftBinary.ServerConfigUDP
 		var err error
 		config.AgentBinaryThriftPort, err = extractPortFromEndpoint(rCfg.Protocols.ThriftBinary.Endpoint)
 		if err != nil {
@@ -185,6 +187,7 @@ func createTraceReceiver(
 	}
 
 	if rCfg.Protocols.ThriftCompact != nil {
+		config.AgentCompactThriftConfig = rCfg.ThriftCompact.ServerConfigUDP
 		var err error
 		config.AgentCompactThriftPort, err = extractPortFromEndpoint(rCfg.Protocols.ThriftCompact.Endpoint)
 		if err != nil {
@@ -231,7 +234,7 @@ func createTraceReceiver(
 	}
 
 	// Create the receiver.
-	return newJaegerReceiver(rCfg.Name(), &config, nextConsumer, params)
+	return newJaegerReceiver(rCfg.Name(), &config, nextConsumer, params), nil
 }
 
 // extract the port number from string in "address:port" format. If the

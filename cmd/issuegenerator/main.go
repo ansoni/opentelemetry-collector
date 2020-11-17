@@ -29,7 +29,6 @@ import (
 )
 
 const (
-
 	// Keys of required environment variables
 	projectUsernameKey = "CIRCLE_PROJECT_USERNAME"
 	projectRepoNameKey = "CIRCLE_PROJECT_REPONAME"
@@ -275,7 +274,7 @@ func (rg reportGenerator) handleBadResponses(response *github.Response) {
 	body, _ := ioutil.ReadAll(response.Body)
 	rg.logger.Fatal(
 		"Unexpected response from GitHub",
-		zap.String("status_code", string(response.StatusCode)),
+		zap.Int("status_code", response.StatusCode),
 		zap.String("response", string(body)),
 		zap.String("url", response.Request.URL.String()),
 	)

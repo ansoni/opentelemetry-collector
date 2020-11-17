@@ -57,7 +57,7 @@ type ZipkinReceiver struct {
 
 	// addr is the address onto which the HTTP server will be bound
 	host         component.Host
-	nextConsumer consumer.TraceConsumer
+	nextConsumer consumer.TracesConsumer
 	instanceName string
 
 	startOnce sync.Once
@@ -69,7 +69,7 @@ type ZipkinReceiver struct {
 var _ http.Handler = (*ZipkinReceiver)(nil)
 
 // New creates a new zipkinreceiver.ZipkinReceiver reference.
-func New(config *Config, nextConsumer consumer.TraceConsumer) (*ZipkinReceiver, error) {
+func New(config *Config, nextConsumer consumer.TracesConsumer) (*ZipkinReceiver, error) {
 	if nextConsumer == nil {
 		return nil, componenterror.ErrNilNextConsumer
 	}
@@ -124,7 +124,7 @@ func (zr *ZipkinReceiver) v1ToTraceSpans(blob []byte, hdr http.Header) (reqs pda
 
 		return zipkin.V1ThriftBatchToInternalTraces(zSpans)
 	}
-	return zipkin.V1JSONBatchToInternalTraces(blob)
+	return zipkin.V1JSONBatchToInternalTraces(blob, zr.config.ParseStringTags)
 }
 
 // deserializeThrift decodes Thrift bytes to a list of spans.
@@ -170,17 +170,17 @@ func (zr *ZipkinReceiver) v2ToTraceSpans(blob []byte, hdr http.Header) (reqs pda
 		zipkinSpans, err = zipkin_proto3.ParseSpans(blob, debugWasSet)
 
 	default: // By default, we'll assume using JSON
-		zipkinSpans, err = zr.deserializeFromJSON(blob, debugWasSet)
+		zipkinSpans, err = zr.deserializeFromJSON(blob)
 	}
 
 	if err != nil {
 		return pdata.Traces{}, err
 	}
 
-	return zipkin.V2SpansToInternalTraces(zipkinSpans)
+	return zipkin.V2SpansToInternalTraces(zipkinSpans, zr.config.ParseStringTags)
 }
 
-func (zr *ZipkinReceiver) deserializeFromJSON(jsonBlob []byte, debugWasSet bool) (zs []*zipkinmodel.SpanModel, err error) {
+func (zr *ZipkinReceiver) deserializeFromJSON(jsonBlob []byte) (zs []*zipkinmodel.SpanModel, err error) {
 	if err = json.Unmarshal(jsonBlob, &zs); err != nil {
 		return nil, err
 	}
@@ -250,16 +250,8 @@ func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Now deserialize and process the spans.
 	asZipkinv1 := r.URL != nil && strings.Contains(r.URL.Path, "api/v1/spans")
 
-	var receiverTagValue string
-	if asZipkinv1 {
-		receiverTagValue = zipkinV1TagValue
-	} else {
-		receiverTagValue = zipkinV2TagValue
-	}
-
 	transportTag := transportType(r)
-	ctx = obsreport.ReceiverContext(
-		ctx, zr.instanceName, transportTag, receiverTagValue)
+	ctx = obsreport.ReceiverContext(ctx, zr.instanceName, transportTag)
 	ctx = obsreport.StartTraceDataReceiveOp(ctx, zr.instanceName, transportTag)
 
 	pr := processBodyIfNecessary(r)
@@ -284,6 +276,10 @@ func (zr *ZipkinReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	consumerErr := zr.nextConsumer.ConsumeTraces(ctx, td)
 
+	receiverTagValue := zipkinV2TagValue
+	if asZipkinv1 {
+		receiverTagValue = zipkinV1TagValue
+	}
 	obsreport.EndTraceDataReceiveOp(ctx, receiverTagValue, td.SpanCount(), consumerErr)
 
 	if consumerErr != nil {

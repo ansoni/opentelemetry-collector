@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"syscall"
 
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -87,7 +88,7 @@ func (s *WindowsService) start(elog *eventlog.Log, appErrorChannel chan error) e
 
 	// app.Start blocks until receiving a SIGTERM signal, so needs to be started
 	// asynchronously, but it will exit early if an error occurs on startup
-	go func() { appErrorChannel <- s.app.Start() }()
+	go func() { appErrorChannel <- s.app.Run() }()
 
 	// wait until the app is in the Running state
 	go func() {
@@ -120,9 +121,9 @@ func openEventLog(serviceName string) (*eventlog.Log, error) {
 }
 
 func newWithEventViewerLoggingHook(params Parameters, elog *eventlog.Log) (*Application, error) {
-	params.LoggingHooks = append(
-		params.LoggingHooks,
-		func(entry zapcore.Entry) error {
+	params.LoggingOptions = append(
+		params.LoggingOptions,
+		zap.Hooks(func(entry zapcore.Entry) error {
 			msg := fmt.Sprintf("%v\r\n\r\nStack Trace:\r\n%v", entry.Message, entry.Stack)
 
 			switch entry.Level {
@@ -139,7 +140,7 @@ func newWithEventViewerLoggingHook(params Parameters, elog *eventlog.Log) (*Appl
 
 			// ignore Debug level logs
 			return nil
-		},
+		}),
 	)
 
 	return New(params)

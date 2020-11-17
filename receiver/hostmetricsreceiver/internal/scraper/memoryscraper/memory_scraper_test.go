@@ -24,11 +24,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/pdata"
 	"go.opentelemetry.io/collector/receiver/hostmetricsreceiver/internal"
+	"go.opentelemetry.io/collector/receiver/hostmetricsreceiver/internal/metadata"
 )
 
-func TestScrapeMetrics(t *testing.T) {
+func TestScrape(t *testing.T) {
 	type testCase struct {
 		name              string
 		virtualMemoryFunc func() (*mem.VirtualMemoryStat, error)
@@ -53,25 +55,28 @@ func TestScrapeMetrics(t *testing.T) {
 				scraper.virtualMemory = test.virtualMemoryFunc
 			}
 
-			err := scraper.Initialize(context.Background())
-			require.NoError(t, err, "Failed to initialize memory scraper: %v", err)
-			defer func() { assert.NoError(t, scraper.Close(context.Background())) }()
-
-			metrics, err := scraper.ScrapeMetrics(context.Background())
+			metrics, err := scraper.Scrape(context.Background())
 			if test.expectedErr != "" {
 				assert.EqualError(t, err, test.expectedErr)
+
+				isPartial := consumererror.IsPartialScrapeError(err)
+				assert.True(t, isPartial)
+				if isPartial {
+					assert.Equal(t, metricsLen, err.(consumererror.PartialScrapeError).Failed)
+				}
+
 				return
 			}
 			require.NoError(t, err, "Failed to scrape metrics: %v", err)
 
 			assert.Equal(t, 1, metrics.Len())
 
-			assertMemoryUsageMetricValid(t, metrics.At(0), memoryUsageDescriptor)
+			assertMemoryUsageMetricValid(t, metrics.At(0), metadata.Metrics.SystemMemoryUsage.New())
 
 			if runtime.GOOS == "linux" {
 				assertMemoryUsageMetricHasLinuxSpecificStateLabels(t, metrics.At(0))
 			} else if runtime.GOOS != "windows" {
-				internal.AssertIntSumMetricLabelHasValue(t, metrics.At(0), 2, stateLabelName, inactiveStateLabelValue)
+				internal.AssertIntSumMetricLabelHasValue(t, metrics.At(0), 2, metadata.Labels.MemState, metadata.LabelMemState.Inactive)
 			}
 
 			internal.AssertSameTimeStampForAllMetrics(t, metrics)
@@ -82,13 +87,13 @@ func TestScrapeMetrics(t *testing.T) {
 func assertMemoryUsageMetricValid(t *testing.T, metric pdata.Metric, descriptor pdata.Metric) {
 	internal.AssertDescriptorEqual(t, descriptor, metric)
 	assert.GreaterOrEqual(t, metric.IntSum().DataPoints().Len(), 2)
-	internal.AssertIntSumMetricLabelHasValue(t, metric, 0, stateLabelName, usedStateLabelValue)
-	internal.AssertIntSumMetricLabelHasValue(t, metric, 1, stateLabelName, freeStateLabelValue)
+	internal.AssertIntSumMetricLabelHasValue(t, metric, 0, metadata.Labels.MemState, metadata.LabelMemState.Used)
+	internal.AssertIntSumMetricLabelHasValue(t, metric, 1, metadata.Labels.MemState, metadata.LabelMemState.Free)
 }
 
 func assertMemoryUsageMetricHasLinuxSpecificStateLabels(t *testing.T, metric pdata.Metric) {
-	internal.AssertIntSumMetricLabelHasValue(t, metric, 2, stateLabelName, bufferedStateLabelValue)
-	internal.AssertIntSumMetricLabelHasValue(t, metric, 3, stateLabelName, cachedStateLabelValue)
-	internal.AssertIntSumMetricLabelHasValue(t, metric, 4, stateLabelName, slabReclaimableStateLabelValue)
-	internal.AssertIntSumMetricLabelHasValue(t, metric, 5, stateLabelName, slabUnreclaimableStateLabelValue)
+	internal.AssertIntSumMetricLabelHasValue(t, metric, 2, metadata.Labels.MemState, metadata.LabelMemState.Buffered)
+	internal.AssertIntSumMetricLabelHasValue(t, metric, 3, metadata.Labels.MemState, metadata.LabelMemState.Cached)
+	internal.AssertIntSumMetricLabelHasValue(t, metric, 4, metadata.Labels.MemState, metadata.LabelMemState.SlabReclaimable)
+	internal.AssertIntSumMetricLabelHasValue(t, metric, 5, metadata.Labels.MemState, metadata.LabelMemState.SlabUnreclaimable)
 }

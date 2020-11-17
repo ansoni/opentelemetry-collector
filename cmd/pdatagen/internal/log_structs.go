@@ -17,6 +17,7 @@ package internal
 var logFile = &File{
 	Name: "log",
 	imports: []string{
+		`otlpcommon "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/common/v1"`,
 		`otlplogs "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/logs/v1"`,
 	},
 	testImports: []string{
@@ -41,7 +42,7 @@ var resourceLogsSlice = &sliceStruct{
 	element:    resourceLogs,
 }
 
-var resourceLogs = &messageStruct{
+var resourceLogs = &messagePtrStruct{
 	structName:     "ResourceLogs",
 	description:    "// ResourceLogs is a collection of logs from a Resource.",
 	originFullName: "otlplogs.ResourceLogs",
@@ -60,7 +61,7 @@ var instrumentationLibraryLogsSlice = &sliceStruct{
 	element:    instrumentationLibraryLogs,
 }
 
-var instrumentationLibraryLogs = &messageStruct{
+var instrumentationLibraryLogs = &messagePtrStruct{
 	structName:     "InstrumentationLibraryLogs",
 	description:    "// InstrumentationLibraryLogs is a collection of logs from a LibraryInstrumentation.",
 	originFullName: "otlplogs.InstrumentationLibraryLogs",
@@ -79,7 +80,7 @@ var logSlice = &sliceStruct{
 	element:    logRecord,
 }
 
-var logRecord = &messageStruct{
+var logRecord = &messagePtrStruct{
 	structName:     "LogRecord",
 	description:    "// LogRecord are experimental implementation of OpenTelemetry Log Data Model.\n",
 	originFullName: "otlplogs.LogRecord",
@@ -130,7 +131,7 @@ var logRecord = &messageStruct{
 	},
 }
 
-var bodyField = &messageField{
+var bodyField = &messagePtrField{
 	fieldName:       "Body",
 	originFieldName: "Body",
 	returnMessage:   anyValue,

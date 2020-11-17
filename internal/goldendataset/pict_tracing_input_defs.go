@@ -14,7 +14,7 @@
 
 package goldendataset
 
-//// Start of PICT inputs for generating golden dataset ResourceSpans (pict_input_traces.txt) ////
+// Start of PICT inputs for generating golden dataset ResourceSpans (pict_input_traces.txt)
 
 // Input columns in pict_input_traces.txt
 const (
@@ -66,7 +66,7 @@ type PICTTracingInputs struct {
 	Spans PICTInputSpans
 }
 
-//// Start of PICT inputs for generating golden dataset Spans (pict_input_spans.txt) ////
+// Start of PICT inputs for generating golden dataset Spans (pict_input_spans.txt)
 
 // Input columns in pict_input_spans.txt
 const (
@@ -146,24 +146,9 @@ const (
 type PICTInputStatus string
 
 const (
-	SpanStatusNil                PICTInputStatus = "Nil"
-	SpanStatusOk                 PICTInputStatus = "Ok"
-	SpanStatusCancelled          PICTInputStatus = "Cancelled"
-	SpanStatusUnknownError       PICTInputStatus = "UnknownError"
-	SpanStatusInvalidArgument    PICTInputStatus = "InvalidArgument"
-	SpanStatusDeadlineExceeded   PICTInputStatus = "DeadlineExceeded"
-	SpanStatusNotFound           PICTInputStatus = "NotFound"
-	SpanStatusAlreadyExists      PICTInputStatus = "AlreadyExists"
-	SpanStatusPermissionDenied   PICTInputStatus = "PermissionDenied"
-	SpanStatusResourceExhausted  PICTInputStatus = "ResourceExhausted"
-	SpanStatusFailedPrecondition PICTInputStatus = "FailedPrecondition"
-	SpanStatusAborted            PICTInputStatus = "Aborted"
-	SpanStatusOutOfRange         PICTInputStatus = "OutOfRange"
-	SpanStatusUnimplemented      PICTInputStatus = "Unimplemented"
-	SpanStatusInternalError      PICTInputStatus = "InternalError"
-	SpanStatusUnavailable        PICTInputStatus = "Unavailable"
-	SpanStatusDataLoss           PICTInputStatus = "DataLoss"
-	SpanStatusUnauthenticated    PICTInputStatus = "Unauthenticated"
+	SpanStatusUnset PICTInputStatus = "Unset"
+	SpanStatusOk    PICTInputStatus = "Ok"
+	SpanStatusError PICTInputStatus = "Error"
 )
 
 // PICTSpanInputs defines one pairwise combination of Span variations

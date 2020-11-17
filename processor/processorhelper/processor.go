@@ -23,7 +23,6 @@ import (
 	"go.opentelemetry.io/collector/config/configmodels"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/obsreport"
 )
 
 // ErrSkipProcessingData is a sentinel value to indicate when traces or metrics should intentionally be dropped
@@ -37,7 +36,7 @@ type Start func(context.Context, component.Host) error
 // Shutdown specifies the function invoked when the processor is being shutdown.
 type Shutdown func(context.Context) error
 
-// TProcessor is a helper interface that allows avoiding implementing all functions in TraceProcessor by using NewTraceProcessor.
+// TProcessor is a helper interface that allows avoiding implementing all functions in TracesProcessor by using NewTraceProcessor.
 type TProcessor interface {
 	// ProcessTraces is a helper function that processes the incoming data and returns the data to be sent to the next component.
 	// If error is returned then returned data are ignored. It MUST not call the next component.
@@ -130,27 +129,26 @@ func (bp *baseProcessor) Shutdown(ctx context.Context) error {
 type tracesProcessor struct {
 	baseProcessor
 	processor    TProcessor
-	nextConsumer consumer.TraceConsumer
+	nextConsumer consumer.TracesConsumer
 }
 
 func (mp *tracesProcessor) ConsumeTraces(ctx context.Context, td pdata.Traces) error {
-	processorCtx := obsreport.ProcessorContext(ctx, mp.fullName)
 	var err error
-	td, err = mp.processor.ProcessTraces(processorCtx, td)
+	td, err = mp.processor.ProcessTraces(ctx, td)
 	if err != nil {
 		return err
 	}
 	return mp.nextConsumer.ConsumeTraces(ctx, td)
 }
 
-// NewTraceProcessor creates a TraceProcessor that ensure context propagation and the right tags are set.
+// NewTraceProcessor creates a TracesProcessor that ensure context propagation and the right tags are set.
 // TODO: Add observability metrics support
 func NewTraceProcessor(
 	config configmodels.Processor,
-	nextConsumer consumer.TraceConsumer,
+	nextConsumer consumer.TracesConsumer,
 	processor TProcessor,
 	options ...Option,
-) (component.TraceProcessor, error) {
+) (component.TracesProcessor, error) {
 	if processor == nil {
 		return nil, errors.New("nil processor")
 	}
@@ -173,9 +171,8 @@ type metricsProcessor struct {
 }
 
 func (mp *metricsProcessor) ConsumeMetrics(ctx context.Context, md pdata.Metrics) error {
-	processorCtx := obsreport.ProcessorContext(ctx, mp.fullName)
 	var err error
-	md, err = mp.processor.ProcessMetrics(processorCtx, md)
+	md, err = mp.processor.ProcessMetrics(ctx, md)
 	if err != nil {
 		if err == ErrSkipProcessingData {
 			return nil
@@ -215,9 +212,8 @@ type logProcessor struct {
 }
 
 func (lp *logProcessor) ConsumeLogs(ctx context.Context, ld pdata.Logs) error {
-	processorCtx := obsreport.ProcessorContext(ctx, lp.fullName)
 	var err error
-	ld, err = lp.processor.ProcessLogs(processorCtx, ld)
+	ld, err = lp.processor.ProcessLogs(ctx, ld)
 	if err != nil {
 		return err
 	}

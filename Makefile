@@ -2,7 +2,6 @@
 # This is the code that we want to run tests for and lint, staticcheck, etc.
 ALL_SRC := $(shell find . -name '*.go' \
 							-not -path './testbed/*' \
-							-not -path '*/third_party/*' \
 							-not -path '*/internal/data/opentelemetry-proto/*' \
 							-not -path '*/internal/data/opentelemetry-proto-gen/*' \
 							-not -path './.circleci/scripts/reportgenerator/*' \
@@ -26,7 +25,6 @@ MISSPELL=misspell -error
 MISSPELL_CORRECTION=misspell -w
 LINT=golangci-lint
 IMPI=impi
-GOSEC=gosec
 STATIC_CHECK=staticcheck
 # BUILD_TYPE should be one of (dev, release).
 BUILD_TYPE?=release
@@ -40,9 +38,17 @@ endif
 BUILD_X3=-X $(BUILD_INFO_IMPORT_PATH).BuildType=$(BUILD_TYPE)
 BUILD_INFO=-ldflags "${BUILD_X1} ${BUILD_X2} ${BUILD_X3}"
 
-RUN_CONFIG?=local/config.yaml
+RUN_CONFIG?=examples/local/otel-config.yaml
 
 CONTRIB_PATH=$(CURDIR)/../opentelemetry-collector-contrib
+
+# Function to execute a command. Note the empty line before endef to make sure each command
+# gets executed separately instead of concatenated with previous one.
+# Accepts command to execute as first parameter.
+define exec-command
+$(1)
+
+endef
 
 all-srcs:
 	@echo $(ALL_SRC) | tr ' ' '\n' | sort
@@ -65,11 +71,11 @@ testbed-correctness: otelcol
 
 .PHONY: testbed-list-loadtest
 testbed-list-loadtest:
-	TESTBED_CONFIG=local.yaml $(GOTEST) -v ./testbed/tests --test.list '.*'| grep "^Test"
+	RUN_TESTBED=1 $(GOTEST) -v ./testbed/tests --test.list '.*'| grep "^Test"
 
 .PHONY: testbed-list-correctness
 testbed-list-correctness:
-	TESTBED_CONFIG=inprocess.yaml $(GOTEST) -v ./testbed/correctness --test.list '.*'| grep "^Test"
+	RUN_TESTBED=1 $(GOTEST) -v ./testbed/correctness --test.list '.*'| grep "^Test"
 
 .PHONY: test
 test:
@@ -81,8 +87,6 @@ benchmark:
 
 .PHONY: test-with-cover
 test-with-cover:
-	@echo Verifying that all packages have test files to count in coverage
-	@internal/buildscripts/check-test-files.sh $(subst go.opentelemetry.io/collector/,./,$(ALL_PKGS))
 	@echo pre-compiling tests
 	@time go test -i $(ALL_PKGS)
 	$(GO_ACC) $(ALL_PKGS)
@@ -111,11 +115,6 @@ misspell:
 .PHONY: misspell-correction
 misspell-correction:
 	$(MISSPELL_CORRECTION) $(ALL_DOC)
-
-.PHONY: lint-gosec
-lint-gosec:
-	# TODO: Consider to use gosec from golangci-lint
-	$(GOSEC) -quiet -exclude=G104 $(ALL_PKGS)
 
 .PHONY: lint-static-check
 lint-static-check:
@@ -150,12 +149,13 @@ install-tools:
 	go install github.com/mjibson/esc
 	go install github.com/ory/go-acc
 	go install github.com/pavius/impi/cmd/impi
-	go install github.com/securego/gosec/cmd/gosec
 	go install github.com/tcnksm/ghr
+	go install golang.org/x/tools/cmd/goimports
 	go install honnef.co/go/tools/cmd/staticcheck
 
 .PHONY: otelcol
 otelcol:
+	go generate ./...
 	GO111MODULE=on CGO_ENABLED=0 go build -o ./bin/otelcol_$(GOOS)_$(GOARCH)$(EXTENSION) $(BUILD_INFO) ./cmd/otelcol
 
 .PHONY: run
@@ -235,15 +235,11 @@ PROTO_TARGET_GEN_DIR=internal/data/opentelemetry-proto-gen
 PROTO_PACKAGE=go.opentelemetry.io/collector/$(PROTO_TARGET_GEN_DIR)
 
 # Intermediate directory used during generation.
-PROTO_INTERMEDIATE_DIR=internal/data/tempprotodir
+PROTO_INTERMEDIATE_DIR=internal/data/.patched-otlp-proto
 
-# Function to execute a command. Note the empty line before endef to make sure each command
-# gets executed separately instead of concatenated with previous one.
-# Accepts command to execute as first parameter.
-define exec-command
-$(1)
-
-endef
+DOCKER_PROTOBUF ?= otel/build-protobuf:0.1.0
+PROTOC := docker run --rm -u ${shell id -u} -v${PWD}:${PWD} -w${PWD}/$(PROTO_INTERMEDIATE_DIR) ${DOCKER_PROTOBUF} --proto_path=${PWD}
+PROTO_INCLUDES := -I/usr/include/github.com/gogo/protobuf -I./
 
 # Generate OTLP Protobuf Go files. This will place generated files in PROTO_TARGET_GEN_DIR.
 genproto:
@@ -257,27 +253,29 @@ genproto_sub:
 	@echo Generating code for the following files:
 	@$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,echo $(file)))
 
-	@echo Copy .proto file to intermediate directory.
-	mkdir -p $(PROTO_INTERMEDIATE_DIR)
-	cp -R $(OPENTELEMETRY_PROTO_SRC_DIR)/* $(PROTO_INTERMEDIATE_DIR)
+	@echo Delete intermediate directory.
+	@rm -rf $(PROTO_INTERMEDIATE_DIR)
 
+	@echo Copy .proto file to intermediate directory.
+	mkdir -p $(PROTO_INTERMEDIATE_DIR)/opentelemetry
+	cp -R $(OPENTELEMETRY_PROTO_SRC_DIR)/opentelemetry/* $(PROTO_INTERMEDIATE_DIR)/opentelemetry
+
+	# Patch proto files. See proto_patch.sed for patching rules.
 	@echo Modify them in the intermediate directory.
-	$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,sed 's+github.com/open-telemetry/opentelemetry-proto/gen/go/+go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/+g' $(OPENTELEMETRY_PROTO_SRC_DIR)/$(file) > $(PROTO_INTERMEDIATE_DIR)/$(file)))
+	$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,sed -f proto_patch.sed $(OPENTELEMETRY_PROTO_SRC_DIR)/$(file) > $(PROTO_INTERMEDIATE_DIR)/$(file)))
 
 	@echo Generate Go code from .proto files in intermediate directory.
-	$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,cd $(PROTO_INTERMEDIATE_DIR) && protoc --gogofaster_out=plugins=grpc:./ -I./ $(file)))
+	$(foreach file,$(OPENTELEMETRY_PROTO_FILES),$(call exec-command,$(PROTOC) $(PROTO_INCLUDES) --gogofaster_out=plugins=grpc:./ $(file)))
 
 	@echo Generate gRPC gateway code.
-	cd $(PROTO_INTERMEDIATE_DIR) && protoc --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/trace/v1/trace_service_http.yaml:./ opentelemetry/proto/collector/trace/v1/trace_service.proto
-	cd $(PROTO_INTERMEDIATE_DIR) && protoc --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/metrics/v1/metrics_service_http.yaml:./ opentelemetry/proto/collector/metrics/v1/metrics_service.proto
-	cd $(PROTO_INTERMEDIATE_DIR) && protoc --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/logs/v1/logs_service_http.yaml:./ opentelemetry/proto/collector/logs/v1/logs_service.proto
+	$(PROTOC) $(PROTO_INCLUDES) --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/trace/v1/trace_service_http.yaml:./ opentelemetry/proto/collector/trace/v1/trace_service.proto
+	$(PROTOC) $(PROTO_INCLUDES) --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/metrics/v1/metrics_service_http.yaml:./ opentelemetry/proto/collector/metrics/v1/metrics_service.proto
+	$(PROTOC) $(PROTO_INCLUDES) --grpc-gateway_out=logtostderr=true,grpc_api_configuration=opentelemetry/proto/collector/logs/v1/logs_service_http.yaml:./ opentelemetry/proto/collector/logs/v1/logs_service.proto
 
 	@echo Move generated code to target directory.
 	mkdir -p $(PROTO_TARGET_GEN_DIR)
 	cp -R $(PROTO_INTERMEDIATE_DIR)/$(PROTO_PACKAGE)/* $(PROTO_TARGET_GEN_DIR)/
-
-	@echo Delete intermediate directory.
-	@rm -rf $(PROTO_INTERMEDIATE_DIR)
+	rm -rf $(PROTO_INTERMEDIATE_DIR)/go.opentelemetry.io
 
 	@rm -rf $(OPENTELEMETRY_PROTO_SRC_DIR)/*
 	@rm -rf $(OPENTELEMETRY_PROTO_SRC_DIR)/.* > /dev/null 2>&1 || true
@@ -286,6 +284,7 @@ genproto_sub:
 # to proto and after running `make genproto`
 genpdata:
 	go run cmd/pdatagen/main.go
+	$(MAKE) fmt
 
 # Checks that the HEAD of the contrib repo checked out in CONTRIB_PATH compiles
 # against the current version of this repo.
@@ -296,3 +295,19 @@ check-contrib:
 	make -C $(CONTRIB_PATH) test
 	@echo Restoring contrib to no longer use this core checkout
 	make -C $(CONTRIB_PATH) for-all CMD="go mod edit -dropreplace go.opentelemetry.io/collector"
+
+# List of directories where certificates are stored for unit tests.
+CERT_DIRS := config/configgrpc/testdata \
+             config/confighttp/testdata \
+             receiver/jaegerreceiver/testdata \
+             exporter/jaegerexporter/testdata
+
+# Generate certificates for unit tests relying on certificates.
+.PHONY: certs
+certs:
+	$(foreach dir, $(CERT_DIRS), $(call exec-command, @internal/buildscripts/gen-certs.sh -o $(dir)))
+
+# Generate certificates for unit tests relying on certificates without copying certs to specific test directories.
+.PHONY: certs-dryrun
+certs-dryrun:
+	@internal/buildscripts/gen-certs.sh -d

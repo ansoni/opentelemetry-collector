@@ -25,7 +25,6 @@ import (
 
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
 )
 
 // MockBackend is a backend that allows receiving the data locally.
@@ -155,7 +154,7 @@ func (mb *MockBackend) ConsumeMetric(md pdata.Metrics) {
 	}
 }
 
-var _ consumer.TraceConsumer = (*MockTraceConsumer)(nil)
+var _ consumer.TracesConsumer = (*MockTraceConsumer)(nil)
 
 func (mb *MockBackend) ConsumeLogs(ld pdata.Logs) {
 	mb.recordMutex.Lock()
@@ -214,7 +213,7 @@ type MockMetricConsumer struct {
 }
 
 func (mc *MockMetricConsumer) ConsumeMetrics(_ context.Context, md pdata.Metrics) error {
-	_, dataPoints := pdatautil.MetricAndDataPointCount(md)
+	_, dataPoints := md.MetricAndDataPointCount()
 	mc.numMetricsReceived.Add(uint64(dataPoints))
 	mc.backend.ConsumeMetric(md)
 	return nil

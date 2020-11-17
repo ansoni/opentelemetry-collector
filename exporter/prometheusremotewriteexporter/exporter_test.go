@@ -32,10 +32,10 @@ import (
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configmodels"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	otlp "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/metrics/v1"
 	"go.opentelemetry.io/collector/internal/data/testdata"
+	"go.opentelemetry.io/collector/internal/version"
 )
 
 // Test_ NewPrwExporter checks that a new exporter instance with non-nil fields is initialized
@@ -46,21 +46,24 @@ func Test_NewPrwExporter(t *testing.T) {
 		QueueSettings:      exporterhelper.QueueSettings{},
 		RetrySettings:      exporterhelper.RetrySettings{},
 		Namespace:          "",
+		ExternalLabels:     map[string]string{},
 		HTTPClientSettings: confighttp.HTTPClientSettings{Endpoint: ""},
 	}
 	tests := []struct {
-		name        string
-		config      *Config
-		namespace   string
-		endpoint    string
-		client      *http.Client
-		returnError bool
+		name           string
+		config         *Config
+		namespace      string
+		endpoint       string
+		externalLabels map[string]string
+		client         *http.Client
+		returnError    bool
 	}{
 		{
 			"invalid_URL",
 			config,
 			"test",
 			"invalid URL",
+			map[string]string{"Key1": "Val1"},
 			http.DefaultClient,
 			true,
 		},
@@ -69,7 +72,17 @@ func Test_NewPrwExporter(t *testing.T) {
 			config,
 			"test",
 			"http://some.url:9411/api/prom/push",
+			map[string]string{"Key1": "Val1"},
 			nil,
+			true,
+		},
+		{
+			"invalid_labels_case",
+			config,
+			"test",
+			"http://some.url:9411/api/prom/push",
+			map[string]string{"Key1": ""},
+			http.DefaultClient,
 			true,
 		},
 		{
@@ -77,6 +90,16 @@ func Test_NewPrwExporter(t *testing.T) {
 			config,
 			"test",
 			"http://some.url:9411/api/prom/push",
+			map[string]string{"Key1": "Val1"},
+			http.DefaultClient,
+			false,
+		},
+		{
+			"success_case_no_labels",
+			config,
+			"test",
+			"http://some.url:9411/api/prom/push",
+			map[string]string{},
 			http.DefaultClient,
 			false,
 		},
@@ -84,7 +107,7 @@ func Test_NewPrwExporter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prwe, err := NewPrwExporter(tt.namespace, tt.endpoint, tt.client)
+			prwe, err := NewPrwExporter(tt.namespace, tt.endpoint, tt.client, tt.externalLabels)
 			if tt.returnError {
 				assert.Error(t, err)
 				return
@@ -92,6 +115,7 @@ func Test_NewPrwExporter(t *testing.T) {
 			require.NotNil(t, prwe)
 			assert.NotNil(t, prwe.namespace)
 			assert.NotNil(t, prwe.endpointURL)
+			assert.NotNil(t, prwe.externalLabels)
 			assert.NotNil(t, prwe.client)
 			assert.NotNil(t, prwe.closeChan)
 			assert.NotNil(t, prwe.wg)
@@ -125,26 +149,26 @@ func Test_Shutdown(t *testing.T) {
 	}
 }
 
-//Test whether or not the Server receives the correct TimeSeries.
-//Currently considering making this test an iterative for loop of multiple TimeSeries
-//Much akin to Test_PushMetrics
+// Test whether or not the Server receives the correct TimeSeries.
+// Currently considering making this test an iterative for loop of multiple TimeSeries much akin to Test_PushMetrics
 func Test_export(t *testing.T) {
-	//First we will instantiate a dummy TimeSeries instance to pass into both the export call and compare the http request
+	// First we will instantiate a dummy TimeSeries instance to pass into both the export call and compare the http request
 	labels := getPromLabels(label11, value11, label12, value12, label21, value21, label22, value22)
 	sample1 := getSample(floatVal1, msTime1)
 	sample2 := getSample(floatVal2, msTime2)
 	ts1 := getTimeSeries(labels, sample1, sample2)
 	handleFunc := func(w http.ResponseWriter, r *http.Request, code int) {
-		//The following is a handler function that reads the sent httpRequest, unmarshals, and checks if the WriteRequest
-		//preserves the TimeSeries data correctly
+		// The following is a handler function that reads the sent httpRequest, unmarshals, and checks if the WriteRequest
+		// preserves the TimeSeries data correctly
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
 		require.NotNil(t, body)
-		//Receives the http requests and unzip, unmarshals, and extracts TimeSeries
+		// Receives the http requests and unzip, unmarshals, and extracts TimeSeries
 		assert.Equal(t, "0.1.0", r.Header.Get("X-Prometheus-Remote-Write-Version"))
 		assert.Equal(t, "snappy", r.Header.Get("Content-Encoding"))
+		assert.Equal(t, "OpenTelemetry-Collector/"+version.Version, r.Header.Get("User-Agent"))
 		writeReq := &prompb.WriteRequest{}
 		unzipped := []byte{}
 
@@ -203,7 +227,7 @@ func Test_export(t *testing.T) {
 			if !tt.serverUp {
 				server.Close()
 			}
-			err := runExportPipeline(t, ts1, serverURL)
+			err := runExportPipeline(ts1, serverURL)
 			if tt.returnError {
 				assert.Error(t, err)
 				return
@@ -213,14 +237,14 @@ func Test_export(t *testing.T) {
 	}
 }
 
-func runExportPipeline(t *testing.T, ts *prompb.TimeSeries, endpoint *url.URL) error {
-	//First we will construct a TimeSeries array from the testutils package
+func runExportPipeline(ts *prompb.TimeSeries, endpoint *url.URL) error {
+	// First we will construct a TimeSeries array from the testutils package
 	testmap := make(map[string]*prompb.TimeSeries)
 	testmap["test"] = ts
 
 	HTTPClient := http.DefaultClient
-	//after this, instantiate a CortexExporter with the current HTTP client and endpoint set to passed in endpoint
-	prwe, err := NewPrwExporter("test", endpoint.String(), HTTPClient)
+	// after this, instantiate a CortexExporter with the current HTTP client and endpoint set to passed in endpoint
+	prwe, err := NewPrwExporter("test", endpoint.String(), HTTPClient, map[string]string{})
 	if err != nil {
 		return err
 	}
@@ -322,6 +346,20 @@ func Test_PushMetrics(t *testing.T) {
 		},
 	}
 	doubleHistogramBatch := pdata.MetricsFromOtlp(doubleHistogramMetric)
+
+	doubleSummaryMetric := []*otlp.ResourceMetrics{
+		{
+			InstrumentationLibraryMetrics: []*otlp.InstrumentationLibraryMetrics{
+				{
+					Metrics: []*otlp.Metric{
+						validMetrics1[validDoubleSummary],
+						validMetrics2[validDoubleSummary],
+					},
+				},
+			},
+		},
+	}
+	doubleSummaryBatch := pdata.MetricsFromOtlp(doubleSummaryMetric)
 
 	// len(BucketCount) > len(ExplicitBounds)
 	unmatchedBoundBucketIntHistMetric := []*otlp.ResourceMetrics{
@@ -429,6 +467,19 @@ func Test_PushMetrics(t *testing.T) {
 	}
 	nilDataPointDoubleHistogramBatch := pdata.MetricsFromOtlp(nilDataPointDoubleHistogramMetric)
 
+	nilDataPointDoubleSummaryMetric := []*otlp.ResourceMetrics{
+		{
+			InstrumentationLibraryMetrics: []*otlp.InstrumentationLibraryMetrics{
+				{
+					Metrics: []*otlp.Metric{
+						errorMetrics[nilDataPointDoubleSummary],
+					},
+				},
+			},
+		},
+	}
+	nilDataPointDoubleSummaryBatch := pdata.MetricsFromOtlp(nilDataPointDoubleSummaryMetric)
+
 	checkFunc := func(t *testing.T, r *http.Request, expected int) {
 		body, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -439,6 +490,7 @@ func Test_PushMetrics(t *testing.T) {
 		dest, err := snappy.Decode(buf, body)
 		assert.Equal(t, "0.1.0", r.Header.Get("x-prometheus-remote-write-version"))
 		assert.Equal(t, "snappy", r.Header.Get("content-encoding"))
+		assert.Equal(t, "OpenTelemetry-Collector/"+version.Version, r.Header.Get("user-agent"))
 		assert.NotNil(t, r.Header.Get("tenant-id"))
 		require.NoError(t, err)
 		wr := &prompb.WriteRequest{}
@@ -462,7 +514,7 @@ func Test_PushMetrics(t *testing.T) {
 			nil,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(invalidTypeBatch),
+			invalidTypeBatch.MetricCount(),
 			true,
 		},
 		{
@@ -471,7 +523,7 @@ func Test_PushMetrics(t *testing.T) {
 			nil,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilResourceBatch),
+			nilResourceBatch.MetricCount(),
 			false,
 		},
 		{
@@ -480,7 +532,7 @@ func Test_PushMetrics(t *testing.T) {
 			nil,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilInstrumentationBatch),
+			nilInstrumentationBatch.MetricCount(),
 			false,
 		},
 		{
@@ -489,7 +541,7 @@ func Test_PushMetrics(t *testing.T) {
 			nil,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilMetricBatch),
+			nilMetricBatch.MetricCount(),
 			true,
 		},
 		{
@@ -547,6 +599,15 @@ func Test_PushMetrics(t *testing.T) {
 			false,
 		},
 		{
+			"doubleSummary_case",
+			&doubleSummaryBatch,
+			checkFunc,
+			10,
+			http.StatusAccepted,
+			0,
+			false,
+		},
+		{
 			"unmatchedBoundBucketIntHist_case",
 			&unmatchedBoundBucketIntHistBatch,
 			checkFunc,
@@ -565,12 +626,21 @@ func Test_PushMetrics(t *testing.T) {
 			false,
 		},
 		{
+			"5xx_case",
+			&unmatchedBoundBucketDoubleHistBatch,
+			checkFunc,
+			5,
+			http.StatusServiceUnavailable,
+			1,
+			true,
+		},
+		{
 			"nilDataPointDoubleGauge_case",
 			&nilDataPointDoubleGaugeBatch,
 			checkFunc,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilDataPointDoubleGaugeBatch),
+			nilDataPointDoubleGaugeBatch.MetricCount(),
 			true,
 		},
 		{
@@ -579,7 +649,7 @@ func Test_PushMetrics(t *testing.T) {
 			checkFunc,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilDataPointIntGaugeBatch),
+			nilDataPointIntGaugeBatch.MetricCount(),
 			true,
 		},
 		{
@@ -588,7 +658,7 @@ func Test_PushMetrics(t *testing.T) {
 			checkFunc,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilDataPointDoubleSumBatch),
+			nilDataPointDoubleSumBatch.MetricCount(),
 			true,
 		},
 		{
@@ -597,7 +667,7 @@ func Test_PushMetrics(t *testing.T) {
 			checkFunc,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilDataPointIntSumBatch),
+			nilDataPointIntSumBatch.MetricCount(),
 			true,
 		},
 		{
@@ -606,7 +676,7 @@ func Test_PushMetrics(t *testing.T) {
 			checkFunc,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilDataPointDoubleHistogramBatch),
+			nilDataPointDoubleHistogramBatch.MetricCount(),
 			true,
 		},
 		{
@@ -615,7 +685,16 @@ func Test_PushMetrics(t *testing.T) {
 			checkFunc,
 			0,
 			http.StatusAccepted,
-			pdatautil.MetricCount(nilDataPointIntHistogramBatch),
+			nilDataPointIntHistogramBatch.MetricCount(),
+			true,
+		},
+		{
+			"nilDataPointDoubleSummary_case",
+			&nilDataPointDoubleSummaryBatch,
+			checkFunc,
+			0,
+			http.StatusAccepted,
+			nilDataPointDoubleSummaryBatch.MetricCount(),
 			true,
 		},
 	}
@@ -651,7 +730,7 @@ func Test_PushMetrics(t *testing.T) {
 			// c, err := config.HTTPClientSettings.ToClient()
 			// assert.Nil(t, err)
 			c := http.DefaultClient
-			prwe, nErr := NewPrwExporter(config.Namespace, serverURL.String(), c)
+			prwe, nErr := NewPrwExporter(config.Namespace, serverURL.String(), c, map[string]string{})
 			require.NoError(t, nErr)
 			numDroppedTimeSeries, err := prwe.PushMetrics(context.Background(), *tt.md)
 			assert.Equal(t, tt.numDroppedTimeSeries, numDroppedTimeSeries)
@@ -659,6 +738,53 @@ func Test_PushMetrics(t *testing.T) {
 				assert.Error(t, err)
 				return
 			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func Test_validateAndSanitizeExternalLabels(t *testing.T) {
+	tests := []struct {
+		name           string
+		inputLabels    map[string]string
+		expectedLabels map[string]string
+		returnError    bool
+	}{
+		{"success_case_no_labels",
+			map[string]string{},
+			map[string]string{},
+			false,
+		},
+		{"success_case_with_labels",
+			map[string]string{"key1": "val1"},
+			map[string]string{"key1": "val1"},
+			false,
+		},
+		{"success_case_2_with_labels",
+			map[string]string{"__key1__": "val1"},
+			map[string]string{"__key1__": "val1"},
+			false,
+		},
+		{"success_case_with_sanitized_labels",
+			map[string]string{"__key1.key__": "val1"},
+			map[string]string{"__key1_key__": "val1"},
+			false,
+		},
+		{"fail_case_empty_label",
+			map[string]string{"": "val1"},
+			map[string]string{},
+			true,
+		},
+	}
+	// run tests
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newLabels, err := validateAndSanitizeExternalLabels(tt.inputLabels)
+			if tt.returnError {
+				assert.Error(t, err)
+				return
+			}
+			assert.EqualValues(t, tt.expectedLabels, newLabels)
 			assert.NoError(t, err)
 		})
 	}

@@ -33,8 +33,6 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
-	"go.opentelemetry.io/collector/internal/collector/telemetry"
 	"go.opentelemetry.io/collector/internal/data/testdata"
 	"go.opentelemetry.io/collector/obsreport/obsreporttest"
 	"go.opentelemetry.io/collector/processor"
@@ -290,7 +288,7 @@ func TestTraceQueueProcessorHappyPath(t *testing.T) {
 	require.NoError(t, err)
 	defer doneFn()
 
-	views := processor.MetricViews(telemetry.Detailed)
+	views := processor.MetricViews()
 	assert.NoError(t, view.Register(views...))
 	defer view.Unregister(views...)
 
@@ -319,7 +317,7 @@ func TestTraceQueueProcessorHappyPath(t *testing.T) {
 	mockP.checkNumBatches(t, wantBatches)
 	mockP.checkNumSpans(t, wantSpans)
 
-	droppedView, err := findViewNamed(views, processor.StatDroppedSpanCount.Name())
+	droppedView, err := findViewNamed(views, "processor/"+processor.StatDroppedSpanCount.Name())
 	require.NoError(t, err)
 
 	data, err := view.RetrieveData(droppedView.Name)
@@ -327,7 +325,7 @@ func TestTraceQueueProcessorHappyPath(t *testing.T) {
 	require.Len(t, data, 1)
 	assert.Equal(t, 0.0, data[0].Data.(*view.SumData).Value)
 
-	data, err = view.RetrieveData(processor.StatTraceBatchesDroppedCount.Name())
+	data, err = view.RetrieveData("processor/" + processor.StatTraceBatchesDroppedCount.Name())
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, data[0].Data.(*view.SumData).Value)
 	obsreporttest.CheckProcessorTracesViews(t, cfg.Name(), int64(wantSpans), 0, 0)
@@ -374,7 +372,7 @@ type mockConcurrentSpanProcessor struct {
 	stopped           int32
 }
 
-var _ consumer.TraceConsumer = (*mockConcurrentSpanProcessor)(nil)
+var _ consumer.TracesConsumer = (*mockConcurrentSpanProcessor)(nil)
 var _ consumer.MetricsConsumer = (*mockConcurrentSpanProcessor)(nil)
 
 func newMockConcurrentSpanProcessor() *mockConcurrentSpanProcessor {
@@ -398,7 +396,7 @@ func (p *mockConcurrentSpanProcessor) ConsumeMetrics(_ context.Context, md pdata
 		return nil
 	}
 	atomic.AddInt64(&p.batchCount, 1)
-	_, mpc := pdatautil.MetricAndDataPointCount(md)
+	_, mpc := md.MetricAndDataPointCount()
 	atomic.AddInt64(&p.metricPointsCount, int64(mpc))
 	p.mu.Lock()
 	defer p.mu.Unlock()

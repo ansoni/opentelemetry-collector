@@ -31,16 +31,15 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/exporter/exportertest"
-	"go.opentelemetry.io/collector/receiver/fluentforwardreceiver/testdata"
 	"go.opentelemetry.io/collector/testutil/logstest"
 )
 
-func setupServer(t *testing.T) (func() net.Conn, *exportertest.SinkLogsExporter, *observer.ObservedLogs, context.CancelFunc) {
+func setupServer(t *testing.T) (func() net.Conn, *consumertest.LogsSink, *observer.ObservedLogs, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	next := &exportertest.SinkLogsExporter{}
+	next := new(consumertest.LogsSink)
 	logCore, logObserver := observer.New(zap.DebugLevel)
 	logger := zap.New(logCore)
 
@@ -80,7 +79,7 @@ func TestMessageEventConversionMalformed(t *testing.T) {
 	connect, _, observedLogs, cancel := setupServer(t)
 	defer cancel()
 
-	eventBytes := testdata.ParseHexDump("message-event")
+	eventBytes := parseHexDump("testdata/message-event")
 
 	vulnerableBits := []int{0, 1, 14, 59}
 
@@ -103,7 +102,7 @@ func TestMessageEvent(t *testing.T) {
 	connect, next, _, cancel := setupServer(t)
 	defer cancel()
 
-	eventBytes := testdata.ParseHexDump("message-event")
+	eventBytes := parseHexDump("testdata/message-event")
 
 	conn := connect()
 	n, err := conn.Write(eventBytes)
@@ -135,7 +134,7 @@ func TestForwardEvent(t *testing.T) {
 	connect, next, _, cancel := setupServer(t)
 	defer cancel()
 
-	eventBytes := testdata.ParseHexDump("forward-event")
+	eventBytes := parseHexDump("testdata/forward-event")
 
 	conn := connect()
 	n, err := conn.Write(eventBytes)
@@ -217,7 +216,7 @@ func TestForwardPackedEvent(t *testing.T) {
 	connect, next, _, cancel := setupServer(t)
 	defer cancel()
 
-	eventBytes := testdata.ParseHexDump("forward-packed")
+	eventBytes := parseHexDump("testdata/forward-packed")
 
 	conn := connect()
 	n, err := conn.Write(eventBytes)
@@ -288,7 +287,7 @@ func TestForwardPackedCompressedEvent(t *testing.T) {
 	connect, next, _, cancel := setupServer(t)
 	defer cancel()
 
-	eventBytes := testdata.ParseHexDump("forward-packed-compressed")
+	eventBytes := parseHexDump("testdata/forward-packed-compressed")
 
 	conn := connect()
 	n, err := conn.Write(eventBytes)
@@ -359,7 +358,7 @@ func TestUnixEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	next := &exportertest.SinkLogsExporter{}
+	next := new(consumertest.LogsSink)
 
 	tmpdir, err := ioutil.TempDir("", "fluent-socket")
 	require.NoError(t, err)
@@ -377,7 +376,7 @@ func TestUnixEndpoint(t *testing.T) {
 	conn, err := net.Dial("unix", receiver.(*fluentReceiver).listener.Addr().String())
 	require.NoError(t, err)
 
-	n, err := conn.Write(testdata.ParseHexDump("message-event"))
+	n, err := conn.Write(parseHexDump("testdata/message-event"))
 	require.NoError(t, err)
 	require.Greater(t, n, 0)
 

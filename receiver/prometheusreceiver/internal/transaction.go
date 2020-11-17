@@ -18,7 +18,7 @@ import (
 	"context"
 	"errors"
 	"math"
-	"strings"
+	"net"
 	"sync/atomic"
 
 	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
@@ -27,16 +27,13 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
-	"go.opencensus.io/plugin/ochttp"
-	"go.opencensus.io/stats"
-	"go.opencensus.io/tag"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumerdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
 	"go.opentelemetry.io/collector/obsreport"
+	"go.opentelemetry.io/collector/translator/internaldata"
 )
 
 const (
@@ -50,6 +47,7 @@ const (
 var errMetricNameNotFound = errors.New("metricName not found from labels")
 var errTransactionAborted = errors.New("transaction aborted")
 var errNoJobInstance = errors.New("job or instance cannot be found from labels")
+var errNoStartTimeMetrics = errors.New("process_start_time_seconds metric is missing")
 
 // A transaction is corresponding to an individual scrape operation or stale report.
 // That said, whenever prometheus receiver scrapped a target metric endpoint a page of raw metrics is returned,
@@ -68,14 +66,14 @@ type transaction struct {
 	useStartTimeMetric   bool
 	startTimeMetricRegex string
 	receiverName         string
-	ms                   MetadataService
+	ms                   *metadataService
 	node                 *commonpb.Node
 	resource             *resourcepb.Resource
 	metricBuilder        *metricBuilder
 	logger               *zap.Logger
 }
 
-func newTransaction(ctx context.Context, jobsMap *JobsMap, useStartTimeMetric bool, startTimeMetricRegex string, receiverName string, ms MetadataService, sink consumer.MetricsConsumer, logger *zap.Logger) *transaction {
+func newTransaction(ctx context.Context, jobsMap *JobsMap, useStartTimeMetric bool, startTimeMetricRegex string, receiverName string, ms *metadataService, sink consumer.MetricsConsumer, logger *zap.Logger) *transaction {
 	return &transaction{
 		id:                   atomic.AddInt64(&idSeq, 1),
 		ctx:                  ctx,
@@ -151,29 +149,25 @@ func (tr *transaction) Commit() error {
 	}
 
 	ctx := obsreport.StartMetricsReceiveOp(tr.ctx, tr.receiverName, transport)
-	metrics, numTimeseries, _, err := tr.metricBuilder.Build()
+	metrics, _, _, err := tr.metricBuilder.Build()
 	if err != nil {
-		// Only error by Build() is errNoDataToBuild, with numTimeseries and
-		// droppedTimeseries set to zero.
-		obsreport.EndMetricsReceiveOp(ctx, dataformat, 0, 0, err)
+		// Only error by Build() is errNoDataToBuild, with numReceivedPoints set to zero.
+		obsreport.EndMetricsReceiveOp(ctx, dataformat, 0, err)
 		return err
 	}
 
-	if tr.metricBuilder.hasInternalMetric {
-		m := ochttp.ClientRoundtripLatency.M(tr.metricBuilder.scrapeLatencyMs)
-		stats.RecordWithTags(tr.ctx, []tag.Mutator{
-			tag.Upsert(ochttp.KeyClientStatus, tr.metricBuilder.scrapeStatus),
-		}, m)
-
-	}
-
 	if tr.useStartTimeMetric {
-		// AdjustStartTime - startTime has to be non-zero in this case.
+		// startTime is mandatory in this case, but may be zero when the
+		// process_start_time_seconds metric is missing from the target endpoint.
 		if tr.metricBuilder.startTime == 0.0 {
-			metrics = []*metricspb.Metric{}
-		} else {
-			adjustStartTime(tr.metricBuilder.startTime, metrics)
+			// Since we are unable to adjust metrics properly, we will drop them
+			// and return an error.
+			err = errNoStartTimeMetrics
+			obsreport.EndMetricsReceiveOp(ctx, dataformat, 0, err)
+			return err
 		}
+
+		adjustStartTime(tr.metricBuilder.startTime, metrics)
 	} else {
 		// AdjustMetrics - jobsMap has to be non-nil in this case.
 		// Note: metrics could be empty after adjustment, which needs to be checked before passing it on to ConsumeMetricsData()
@@ -182,16 +176,15 @@ func (tr *transaction) Commit() error {
 
 	numPoints := 0
 	if len(metrics) > 0 {
-		md := consumerdata.MetricsData{
+		md := internaldata.OCToMetrics(consumerdata.MetricsData{
 			Node:     tr.node,
 			Resource: tr.resource,
 			Metrics:  metrics,
-		}
-		numTimeseries, numPoints = obsreport.CountMetricPoints(md)
-		err = tr.sink.ConsumeMetrics(ctx, pdatautil.MetricsFromMetricsData([]consumerdata.MetricsData{md}))
+		})
+		_, numPoints = md.MetricAndDataPointCount()
+		err = tr.sink.ConsumeMetrics(ctx, md)
 	}
-	obsreport.EndMetricsReceiveOp(
-		ctx, dataformat, numPoints, numTimeseries, err)
+	obsreport.EndMetricsReceiveOp(ctx, dataformat, numPoints, err)
 	return err
 }
 
@@ -223,10 +216,9 @@ func timestampFromFloat64(ts float64) *timestamppb.Timestamp {
 }
 
 func createNodeAndResource(job, instance, scheme string) (*commonpb.Node, *resourcepb.Resource) {
-	splitted := strings.Split(instance, ":")
-	host, port := splitted[0], "80"
-	if len(splitted) >= 2 {
-		port = splitted[1]
+	host, port, err := net.SplitHostPort(instance)
+	if err != nil {
+		host = instance
 	}
 	node := &commonpb.Node{
 		ServiceInfo: &commonpb.ServiceInfo{Name: job},

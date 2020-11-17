@@ -23,12 +23,12 @@ import (
 	agentmetricspb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/metrics/v1"
 	agenttracepb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/trace/v1"
 	resourcepb "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/translator/internaldata"
 )
@@ -107,7 +107,7 @@ func (oce *ocExporter) shutdown(context.Context) error {
 	return oce.grpcClientConn.Close()
 }
 
-func newTraceExporter(ctx context.Context, cfg *Config) (component.TraceExporter, error) {
+func newTraceExporter(ctx context.Context, cfg *Config, logger *zap.Logger) (component.TracesExporter, error) {
 	oce, err := newOcExporter(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -123,11 +123,12 @@ func newTraceExporter(ctx context.Context, cfg *Config) (component.TraceExporter
 
 	return exporterhelper.NewTraceExporter(
 		cfg,
+		logger,
 		oce.pushTraceData,
 		exporterhelper.WithShutdown(oce.shutdown))
 }
 
-func newMetricsExporter(ctx context.Context, cfg *Config) (component.MetricsExporter, error) {
+func newMetricsExporter(ctx context.Context, cfg *Config, logger *zap.Logger) (component.MetricsExporter, error) {
 	oce, err := newOcExporter(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -143,6 +144,7 @@ func newMetricsExporter(ctx context.Context, cfg *Config) (component.MetricsExpo
 
 	return exporterhelper.NewMetricsExporter(
 		cfg,
+		logger,
 		oce.pushMetricsData,
 		exporterhelper.WithShutdown(oce.shutdown))
 }
@@ -202,7 +204,7 @@ func (oce *ocExporter) pushMetricsData(_ context.Context, md pdata.Metrics) (int
 	mClient, ok := <-oce.metricsClients
 	if !ok {
 		err := errors.New("failed to push metrics, OpenCensus exporter was already stopped")
-		return pdatautil.MetricPointCount(md), err
+		return metricPointCount(md), err
 	}
 
 	// In any of the metricsClients channel we keep always NumWorkers object (sometimes nil),
@@ -215,11 +217,11 @@ func (oce *ocExporter) pushMetricsData(_ context.Context, md pdata.Metrics) (int
 		if err != nil {
 			// Cannot create an RPC, put back nil to keep the number of workers constant.
 			oce.metricsClients <- nil
-			return pdatautil.MetricPointCount(md), err
+			return metricPointCount(md), err
 		}
 	}
 
-	ocmds := pdatautil.MetricsToMetricsData(md)
+	ocmds := internaldata.MetricsToOC(md)
 	for _, ocmd := range ocmds {
 		// This is a hack because OC protocol expects a Node for the initial message.
 		node := ocmd.Node
@@ -240,7 +242,7 @@ func (oce *ocExporter) pushMetricsData(_ context.Context, md pdata.Metrics) (int
 			// put back nil to keep the number of workers constant.
 			mClient.cancel()
 			oce.metricsClients <- nil
-			return pdatautil.MetricPointCount(md), err
+			return metricPointCount(md), err
 		}
 	}
 	oce.metricsClients <- mClient
@@ -275,4 +277,9 @@ func (oce *ocExporter) createMetricsServiceRPC() (*metricsClientWithCancel, erro
 		return nil, fmt.Errorf("MetricsServiceClient: %w", err)
 	}
 	return &metricsClientWithCancel{cancel: cancel, msec: metricsClient}, nil
+}
+
+func metricPointCount(md pdata.Metrics) int {
+	_, pc := md.MetricAndDataPointCount()
+	return pc
 }

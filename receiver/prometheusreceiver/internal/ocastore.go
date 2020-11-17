@@ -17,7 +17,6 @@ package internal
 import (
 	"context"
 	"io"
-	"sync"
 	"sync/atomic"
 
 	"github.com/prometheus/prometheus/pkg/labels"
@@ -47,16 +46,17 @@ type OcaStore interface {
 
 // OpenCensus Store for prometheus
 type ocaStore struct {
-	running              int32
-	logger               *zap.Logger
+	ctx context.Context
+
+	running              int32 // access atomically
 	sink                 consumer.MetricsConsumer
-	mc                   *mService
-	once                 *sync.Once
-	ctx                  context.Context
+	mc                   *metadataService
 	jobsMap              *JobsMap
 	useStartTimeMetric   bool
 	startTimeMetricRegex string
 	receiverName         string
+
+	logger *zap.Logger
 }
 
 // NewOcaStore returns an ocaStore instance, which can be acted as prometheus' scrape.Appendable
@@ -66,7 +66,6 @@ func NewOcaStore(ctx context.Context, sink consumer.MetricsConsumer, logger *zap
 		ctx:                  ctx,
 		sink:                 sink,
 		logger:               logger,
-		once:                 &sync.Once{},
 		jobsMap:              jobsMap,
 		useStartTimeMetric:   useStartTimeMetric,
 		startTimeMetricRegex: startTimeMetricRegex,
@@ -78,11 +77,11 @@ func NewOcaStore(ctx context.Context, sink consumer.MetricsConsumer, logger *zap
 // cannot accept any Appender() request
 func (o *ocaStore) SetScrapeManager(scrapeManager *scrape.Manager) {
 	if scrapeManager != nil && atomic.CompareAndSwapInt32(&o.running, runningStateInit, runningStateReady) {
-		o.mc = &mService{sm: scrapeManager}
+		o.mc = &metadataService{sm: scrapeManager}
 	}
 }
 
-func (o *ocaStore) Appender() storage.Appender {
+func (o *ocaStore) Appender(context.Context) storage.Appender {
 	state := atomic.LoadInt32(&o.running)
 	if state == runningStateReady {
 		return newTransaction(o.ctx, o.jobsMap, o.useStartTimeMetric, o.startTimeMetricRegex, o.receiverName, o.mc, o.sink, o.logger)

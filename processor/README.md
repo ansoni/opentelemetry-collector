@@ -1,8 +1,9 @@
 # General Information
-Processors are used at various stages of a [pipeline](../docs/pipelines.md).
-Generally, a processor pre-processes data before it is exported (e.g.
-modify attributes or sample) or helps ensure that data makes it through a
-pipeline successfully (e.g. batch/retry).
+
+Processors are used at various stages of a pipeline. Generally, a processor
+pre-processes data before it is exported (e.g. modify attributes or sample) or
+helps ensure that data makes it through a pipeline successfully (e.g.
+batch/retry).
 
 Some important aspects of pipelines and processors to be aware of:
 - [Recommended Processors](#recommended-processors)
@@ -15,13 +16,10 @@ Supported processors (sorted alphabetically):
 - [Attributes Processor](attributesprocessor/README.md)
 - [Batch Processor](batchprocessor/README.md)
 - [Filter Processor](filterprocessor/README.md)
-- [Group by Trace Processor](groupbytraceprocessor/README.md)
 - [Memory Limiter Processor](memorylimiter/README.md)
 - [Queued Retry Processor](queuedprocessor/README.md)
 - [Resource Processor](resourceprocessor/README.md)
-- Sampling Processors
-  - [Probabilistic Sampling Processor](samplingprocessor/probabilisticsamplerprocessor/README.md)
-  - [Tail Sampling Processor](samplingprocessor/tailsamplingprocessor/README.md)
+- [Probabilistic Sampling Processor](samplingprocessor/probabilisticsamplerprocessor/README.md)
 - [Span Processor](spanprocessor/README.md)
 
 The [contributors repository](https://github.com/open-telemetry/opentelemetry-collector-contrib)
@@ -42,12 +40,12 @@ processor documentation for more information.
 2. *any sampling processors*
 3. [batch](batchprocessor/README.md)
 4. *any other processors*
-5. [queued_retry](queuedprocessor/README.md)
 
 ### Metrics
 
 1. [memory_limiter](memorylimiter/README.md)
 2. [batch](batchprocessor/README.md)
+3. *any other processors*
 
 ## <a name="data-ownership"></a>Data Ownership
 

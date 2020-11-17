@@ -17,6 +17,7 @@ package internal
 var traceFile = &File{
 	Name: "trace",
 	imports: []string{
+		`otlpcommon "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/common/v1"`,
 		`otlptrace "go.opentelemetry.io/collector/internal/data/opentelemetry-proto-gen/trace/v1"`,
 	},
 	testImports: []string{
@@ -46,7 +47,7 @@ var resourceSpansSlice = &sliceStruct{
 	element:    resourceSpans,
 }
 
-var resourceSpans = &messageStruct{
+var resourceSpans = &messagePtrStruct{
 	structName:     "ResourceSpans",
 	description:    "// InstrumentationLibrarySpans is a collection of spans from a LibraryInstrumentation.",
 	originFullName: "otlptrace.ResourceSpans",
@@ -65,7 +66,7 @@ var instrumentationLibrarySpansSlice = &sliceStruct{
 	element:    instrumentationLibrarySpans,
 }
 
-var instrumentationLibrarySpans = &messageStruct{
+var instrumentationLibrarySpans = &messagePtrStruct{
 	structName:     "InstrumentationLibrarySpans",
 	description:    "// InstrumentationLibrarySpans is a collection of spans from a LibraryInstrumentation.",
 	originFullName: "otlptrace.InstrumentationLibrarySpans",
@@ -84,7 +85,7 @@ var spanSlice = &sliceStruct{
 	element:    span,
 }
 
-var span = &messageStruct{
+var span = &messagePtrStruct{
 	structName: "Span",
 	description: "// Span represents a single operation within a trace.\n" +
 		"// See Span definition in OTLP: https://github.com/open-telemetry/opentelemetry-proto/blob/master/opentelemetry/proto/trace/v1/trace.proto#L37",
@@ -131,7 +132,7 @@ var span = &messageStruct{
 			defaultVal:      "uint32(0)",
 			testVal:         "uint32(17)",
 		},
-		&messageField{
+		&messagePtrField{
 			fieldName:       "Status",
 			originFieldName: "Status",
 			returnMessage:   spanStatus,
@@ -144,7 +145,7 @@ var spanEventSlice = &sliceStruct{
 	element:    spanEvent,
 }
 
-var spanEvent = &messageStruct{
+var spanEvent = &messagePtrStruct{
 	structName: "SpanEvent",
 	description: "// SpanEvent is a time-stamped annotation of the span, consisting of user-supplied\n" +
 		"// text description and key-value pairs. See OTLP for event definition.",
@@ -162,7 +163,7 @@ var spanLinkSlice = &sliceStruct{
 	element:    spanLink,
 }
 
-var spanLink = &messageStruct{
+var spanLink = &messagePtrStruct{
 	structName: "SpanLink",
 	description: "// SpanLink is a pointer from the current span to another span in the same trace or in a\n" +
 		"// different trace. See OTLP for link definition.",
@@ -176,7 +177,7 @@ var spanLink = &messageStruct{
 	},
 }
 
-var spanStatus = &messageStruct{
+var spanStatus = &messagePtrStruct{
 	structName: "SpanStatus",
 	description: "// SpanStatus is an optional final status for this span. Semantically when Status wasn't set\n" +
 		"// it is means span ended without errors and assume Status.Ok (code = 0).",
@@ -189,6 +190,18 @@ var spanStatus = &messageStruct{
 			rawType:         "otlptrace.Status_StatusCode",
 			defaultVal:      "StatusCode(0)",
 			testVal:         "StatusCode(1)",
+			// Generate code without setter. Setter will be manually coded since we
+			// need to also change DeprecatedCode when Code is changed according
+			// to OTLP spec https://github.com/open-telemetry/opentelemetry-proto/blob/59c488bfb8fb6d0458ad6425758b70259ff4a2bd/opentelemetry/proto/trace/v1/trace.proto#L231
+			manualSetter: true,
+		},
+		&primitiveTypedField{
+			fieldName:       "DeprecatedCode",
+			originFieldName: "DeprecatedCode",
+			returnType:      "DeprecatedStatusCode",
+			rawType:         "otlptrace.Status_DeprecatedStatusCode",
+			defaultVal:      "DeprecatedStatusCode(0)",
+			testVal:         "DeprecatedStatusCode(1)",
 		},
 		&primitiveField{
 			fieldName:       "Message",
@@ -204,27 +217,27 @@ var traceIDField = &primitiveTypedField{
 	fieldName:       "TraceID",
 	originFieldName: "TraceId",
 	returnType:      "TraceID",
-	rawType:         "[]byte",
-	defaultVal:      "NewTraceID(nil)",
-	testVal:         "NewTraceID([]byte{1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1})",
+	rawType:         "otlpcommon.TraceID",
+	defaultVal:      "NewTraceID([16]byte{})",
+	testVal:         "NewTraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6, 5, 4, 3, 2, 1})",
 }
 
 var spanIDField = &primitiveTypedField{
 	fieldName:       "SpanID",
 	originFieldName: "SpanId",
 	returnType:      "SpanID",
-	rawType:         "[]byte",
-	defaultVal:      "NewSpanID(nil)",
-	testVal:         "NewSpanID([]byte{1, 2, 3, 4, 5, 6, 7, 8})",
+	rawType:         "otlpcommon.SpanID",
+	defaultVal:      "NewSpanID([8]byte{})",
+	testVal:         "NewSpanID([8]byte{1, 2, 3, 4, 5, 6, 7, 8})",
 }
 
 var parentSpanIDField = &primitiveTypedField{
 	fieldName:       "ParentSpanID",
 	originFieldName: "ParentSpanId",
 	returnType:      "SpanID",
-	rawType:         "[]byte",
-	defaultVal:      "NewSpanID(nil)",
-	testVal:         "NewSpanID([]byte{8, 7, 6, 5, 4, 3, 2, 1})",
+	rawType:         "otlpcommon.SpanID",
+	defaultVal:      "NewSpanID([8]byte{})",
+	testVal:         "NewSpanID([8]byte{8, 7, 6, 5, 4, 3, 2, 1})",
 }
 
 var traceStateField = &primitiveTypedField{

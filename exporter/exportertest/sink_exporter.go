@@ -21,10 +21,10 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/pdata"
-	"go.opentelemetry.io/collector/consumer/pdatautil"
 )
 
 // SinkTraceExporter acts as a trace receiver for use in tests.
+// Deprecated: Use consumertest.TracesSink
 type SinkTraceExporter struct {
 	mu                sync.Mutex
 	consumeTraceError error // to be returned by ConsumeTraces, if set
@@ -93,6 +93,7 @@ func (ste *SinkTraceExporter) Shutdown(context.Context) error {
 }
 
 // SinkMetricsExporter acts as a metrics receiver for use in tests.
+// Deprecated: Use consumertest.MetricsSink
 type SinkMetricsExporter struct {
 	mu                  sync.Mutex
 	consumeMetricsError error // to be returned by ConsumeMetrics, if set
@@ -123,7 +124,7 @@ func (sme *SinkMetricsExporter) ConsumeMetrics(_ context.Context, md pdata.Metri
 	}
 
 	sme.metrics = append(sme.metrics, md)
-	sme.metricsCount += pdatautil.MetricCount(md)
+	sme.metricsCount += md.MetricCount()
 
 	return nil
 }
@@ -160,6 +161,7 @@ func (sme *SinkMetricsExporter) Shutdown(context.Context) error {
 }
 
 // SinkLogsExporter acts as a metrics receiver for use in tests.
+// Deprecated: Use consumertest.LogsSink
 type SinkLogsExporter struct {
 	consumeLogError error // to be returned by ConsumeLog, if set
 	mu              sync.Mutex
